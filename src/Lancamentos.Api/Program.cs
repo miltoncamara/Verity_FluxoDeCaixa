@@ -1,22 +1,42 @@
 using Lancamentos.Api.Data;
 using Lancamentos.Api.Endpoints;
 using Lancamentos.Api.Messaging;
+using Lancamentos.Api.Seguranca;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
+using Npgsql;
 
 var builder = WebApplication.CreateBuilder(args);
 
+var connectionString = builder.Configuration.GetConnectionString("Lancamentos");
+
 builder.Services.AddProblemDetails();
 builder.Services.AddDbContext<LancamentosDbContext>(options => options
-    .UseNpgsql(
-        builder.Configuration.GetConnectionString("Lancamentos"),
-        npgsql => npgsql.EnableRetryOnFailure())
+    .UseNpgsql(connectionString, npgsql => npgsql.EnableRetryOnFailure())
     .UseSnakeCaseNamingConvention());
 builder.Services.AddHostedService<OutboxPublisher>();
+
+// O health check olha somente o próprio banco. O RabbitMQ fora do ar não deixa a API indisponível,
+// porque os lançamentos continuam sendo aceitos e ficam guardados na outbox.
+builder.Services.AddHealthChecks().AddAsyncCheck("postgres", async ct =>
+{
+    try
+    {
+        await using var conexao = new NpgsqlConnection(connectionString);
+        await conexao.OpenAsync(ct);
+        return HealthCheckResult.Healthy();
+    }
+    catch (Exception ex)
+    {
+        return HealthCheckResult.Unhealthy("Banco de lançamentos indisponível.", ex);
+    }
+}, timeout: TimeSpan.FromSeconds(3));
 
 var app = builder.Build();
 
 app.UseExceptionHandler();
 app.UseStatusCodePages();
+app.UseMiddleware<ApiKeyMiddleware>();
 
 // Aplica as migrations na inicialização. Suficiente para rodar localmente.
 // Em produção a migration rodaria como etapa separada do pipeline de deploy.
@@ -26,6 +46,7 @@ using (var scope = app.Services.CreateScope())
     await db.Database.MigrateAsync();
 }
 
+app.MapHealthChecks("/health");
 app.MapLancamentosEndpoints();
 
 app.Run();

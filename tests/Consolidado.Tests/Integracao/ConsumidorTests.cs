@@ -13,7 +13,7 @@ namespace Consolidado.Tests.Integracao;
 [Collection(ConsolidadoApiCollection.Nome)]
 public class ConsumidorTests(ConsolidadoApiFactory factory)
 {
-    private readonly HttpClient _client = factory.CreateClient();
+    private readonly HttpClient _client = factory.CriarClienteAutenticado();
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     private static DateOnly DataUnica() => DateOnly.FromDayNumber(Random.Shared.Next(700_000, 800_000));

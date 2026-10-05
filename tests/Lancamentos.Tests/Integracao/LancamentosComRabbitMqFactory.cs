@@ -12,6 +12,8 @@ namespace Lancamentos.Tests.Integracao;
 /// </summary>
 public sealed class LancamentosComRabbitMqFactory : WebApplicationFactory<Program>, IAsyncLifetime
 {
+    public const string ChaveDeTeste = "chave-de-teste";
+
     private readonly PostgreSqlContainer _postgres = new PostgreSqlBuilder("postgres:17-alpine").Build();
     private readonly RabbitMqContainer _rabbit = new RabbitMqBuilder("rabbitmq:4-management-alpine")
         .WithUsername("fluxo").WithPassword("teste").Build();
@@ -22,11 +24,19 @@ public sealed class LancamentosComRabbitMqFactory : WebApplicationFactory<Progra
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
+        builder.UseSetting("Seguranca:ApiKey", ChaveDeTeste);
         builder.UseSetting("ConnectionStrings:Lancamentos", _postgres.GetConnectionString());
         builder.UseSetting("RabbitMQ:Host", _rabbit.Hostname);
         builder.UseSetting("RabbitMQ:Port", _rabbit.GetMappedPublicPort(5672).ToString());
         builder.UseSetting("RabbitMQ:User", "fluxo");
         builder.UseSetting("RabbitMQ:Password", "teste");
+    }
+
+    public HttpClient CriarClienteAutenticado()
+    {
+        var client = CreateClient();
+        client.DefaultRequestHeaders.Add("X-Api-Key", ChaveDeTeste);
+        return client;
     }
 
     public LancamentosDbContext CriarDbContext() =>

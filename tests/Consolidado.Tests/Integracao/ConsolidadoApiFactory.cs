@@ -18,6 +18,8 @@ namespace Consolidado.Tests.Integracao;
 /// </summary>
 public sealed class ConsolidadoApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
 {
+    public const string ChaveDeTeste = "chave-de-teste";
+
     private readonly PostgreSqlContainer _postgres = new PostgreSqlBuilder("postgres:17-alpine").Build();
     private readonly RabbitMqContainer _rabbit = new RabbitMqBuilder("rabbitmq:4-management-alpine")
         .WithUsername("fluxo").WithPassword("teste").Build();
@@ -39,6 +41,7 @@ public sealed class ConsolidadoApiFactory : WebApplicationFactory<Program>, IAsy
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
+        builder.UseSetting("Seguranca:ApiKey", ChaveDeTeste);
         builder.UseSetting("ConnectionStrings:Consolidado", _postgres.GetConnectionString());
         builder.UseSetting("RabbitMQ:Host", _rabbit.Hostname);
         builder.UseSetting("RabbitMQ:Port", _rabbit.GetMappedPublicPort(5672).ToString());
@@ -46,8 +49,17 @@ public sealed class ConsolidadoApiFactory : WebApplicationFactory<Program>, IAsy
         builder.UseSetting("RabbitMQ:Password", "teste");
     }
 
+    public HttpClient CriarClienteAutenticado()
+    {
+        var client = CreateClient();
+        client.DefaultRequestHeaders.Add("X-Api-Key", ChaveDeTeste);
+        return client;
+    }
+
     public ConsolidadoDbContext CriarDbContext() =>
         Services.CreateScope().ServiceProvider.GetRequiredService<ConsolidadoDbContext>();
+
+    public Task PararBancoAsync() => _postgres.StopAsync();
 
     public Task PublicarAsync(LancamentoRegistrado evento) =>
         PublicarAsync(JsonSerializer.Serialize(evento, JsonSerializerOptions.Web), evento.EventoId.ToString());

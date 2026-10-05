@@ -11,7 +11,7 @@ namespace Lancamentos.Tests.Integracao;
 [Collection(LancamentosComRabbitMqCollection.Nome)]
 public class OutboxPublisherTests(LancamentosComRabbitMqFactory factory) : IAsyncLifetime
 {
-    private readonly HttpClient _client = factory.CreateClient();
+    private readonly HttpClient _client = factory.CriarClienteAutenticado();
     private IConnection _conexao = null!;
     private IChannel _canal = null!;
     private static CancellationToken Ct => TestContext.Current.CancellationToken;

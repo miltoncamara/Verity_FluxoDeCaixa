@@ -10,7 +10,7 @@ namespace Lancamentos.Tests.Integracao;
 [Collection(LancamentosApiCollection.Nome)]
 public class LancamentosEndpointsTests(LancamentosApiFactory factory)
 {
-    private readonly HttpClient _client = factory.CreateClient();
+    private readonly HttpClient _client = factory.CriarClienteAutenticado();
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     // Cada teste usa uma data própria para não enxergar dados dos outros testes.

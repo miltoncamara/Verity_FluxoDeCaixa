@@ -61,6 +61,7 @@ services:
       RabbitMQ__Host: rabbitmq
       RabbitMQ__User: fluxo
       RabbitMQ__Password: ${RABBITMQ_PASSWORD:-local-dev}
+      Seguranca__ApiKey: ${API_KEY:-local-dev-key}
     ports:
       - "5001:8080"
     # Depende apenas do próprio banco. O RabbitMQ e o consolidado podem estar fora do ar.
@@ -78,6 +79,7 @@ services:
       RabbitMQ__Host: rabbitmq
       RabbitMQ__User: fluxo
       RabbitMQ__Password: ${RABBITMQ_PASSWORD:-local-dev}
+      Seguranca__ApiKey: ${API_KEY:-local-dev-key}
     ports:
       - "5002:8080"
     # O consumidor reconecta sozinho se o RabbitMQ não estiver de pé.
