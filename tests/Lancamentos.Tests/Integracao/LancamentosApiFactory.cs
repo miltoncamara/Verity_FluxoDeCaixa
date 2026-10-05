@@ -8,7 +8,7 @@ namespace Lancamentos.Tests.Integracao;
 
 /// <summary>
 /// Sobe a Lancamentos.Api em memória apontando para um PostgreSQL real em container.
-/// Um container por execução, compartilhado pelos testes da collection.
+/// O RabbitMQ aponta de propósito para uma porta onde não há nada: é o cenário de broker fora do ar.
 /// </summary>
 public sealed class LancamentosApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
 {
@@ -16,8 +16,12 @@ public sealed class LancamentosApiFactory : WebApplicationFactory<Program>, IAsy
 
     public async ValueTask InitializeAsync() => await _postgres.StartAsync();
 
-    protected override void ConfigureWebHost(IWebHostBuilder builder) =>
+    protected override void ConfigureWebHost(IWebHostBuilder builder)
+    {
         builder.UseSetting("ConnectionStrings:Lancamentos", _postgres.GetConnectionString());
+        builder.UseSetting("RabbitMQ:Host", "localhost");
+        builder.UseSetting("RabbitMQ:Port", "1");
+    }
 
     public LancamentosDbContext CriarDbContext() =>
         Services.CreateScope().ServiceProvider.GetRequiredService<LancamentosDbContext>();

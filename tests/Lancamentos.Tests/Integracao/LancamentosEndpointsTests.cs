@@ -44,6 +44,23 @@ public class LancamentosEndpointsTests(LancamentosApiFactory factory)
     }
 
     [Fact]
+    public async Task Post_e_confirmado_mesmo_com_rabbitmq_fora_do_ar_e_evento_fica_pendente()
+    {
+        // Nesta factory o RabbitMQ aponta para uma porta sem nada escutando.
+        var resposta = await _client.PostAsJsonAsync("/lancamentos",
+            new { data = DataUnica(), tipo = "Debito", valor = 15m, descricao = "Taxa" }, Ct);
+
+        Assert.Equal(HttpStatusCode.Created, resposta.StatusCode);
+        var criado = await resposta.Content.ReadFromJsonAsync<LancamentoResponse>(Ct);
+
+        // Dá tempo para o publicador tentar alguns ciclos. O evento deve continuar pendente, sem se perder.
+        await Task.Delay(TimeSpan.FromSeconds(2), Ct);
+        await using var db = factory.CriarDbContext();
+        var (mensagem, _) = Assert.Single(await EventosDoLancamento(db, criado!.Id));
+        Assert.Null(mensagem.PublicadoEm);
+    }
+
+    [Fact]
     public async Task Post_repetido_com_mesma_idempotency_key_nao_duplica()
     {
         var chave = Guid.NewGuid().ToString();
