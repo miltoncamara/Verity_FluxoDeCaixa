@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-e-testes:
+    name: Build e testes (unitários e integração)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore FluxoCaixa.slnx
+
+      - name: Build
+        run: dotnet build FluxoCaixa.slnx --no-restore -c Release
+
+      # Os testes de integração usam Testcontainers, que sobe PostgreSQL e RabbitMQ no Docker do runner.
+      - name: Testes
+        run: dotnet test --solution FluxoCaixa.slnx --no-build -c Release
+
+  caos:
+    name: Teste de caos (consolidado e RabbitMQ fora)
+    needs: build-e-testes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Teste de caos
+        run: bash scripts/caos.sh
+
+      - name: Logs dos containers em caso de falha
+        if: failure()
+        run: docker compose logs --tail 200
+
+  carga:
+    name: Teste de carga curto (k6)
+    needs: build-e-testes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Sobe a solução
+        run: |
+          docker compose up -d --build
+          for servico in 5001 5002; do
+            for _ in $(seq 1 60); do curl -fs "http://localhost:$servico/health" && break; sleep 2; done
+          done
+
+      # Versão curta do teste do docs/carga. Os mesmos thresholds, com duração menor para caber no CI.
+      - name: k6
+        run: DURACAO_PICO=60s DURACAO_FOLGA=30s bash scripts/carga.sh
+
+      - name: Resultado
+        if: always()
+        run: cat docs/carga/resultado-k6.md >> "$GITHUB_STEP_SUMMARY"
