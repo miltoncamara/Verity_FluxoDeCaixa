@@ -58,10 +58,31 @@ services:
       dockerfile: src/Lancamentos.Api/Dockerfile
     environment:
       ConnectionStrings__Lancamentos: "Host=postgres-lancamentos;Database=lancamentos;Username=postgres;Password=${POSTGRES_PASSWORD:-local-dev}"
+      RabbitMQ__Host: rabbitmq
+      RabbitMQ__User: fluxo
+      RabbitMQ__Password: ${RABBITMQ_PASSWORD:-local-dev}
     ports:
       - "5001:8080"
+    # Depende apenas do próprio banco. O RabbitMQ e o consolidado podem estar fora do ar.
     depends_on:
       postgres-lancamentos:
+        condition: service_healthy
+    restart: unless-stopped
+
+  consolidado-api:
+    build:
+      context: .
+      dockerfile: src/Consolidado.Api/Dockerfile
+    environment:
+      ConnectionStrings__Consolidado: "Host=postgres-consolidado;Database=consolidado;Username=postgres;Password=${POSTGRES_PASSWORD:-local-dev}"
+      RabbitMQ__Host: rabbitmq
+      RabbitMQ__User: fluxo
+      RabbitMQ__Password: ${RABBITMQ_PASSWORD:-local-dev}
+    ports:
+      - "5002:8080"
+    # O consumidor reconecta sozinho se o RabbitMQ não estiver de pé.
+    depends_on:
+      postgres-consolidado:
         condition: service_healthy
     restart: unless-stopped
 
