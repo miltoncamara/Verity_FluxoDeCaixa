@@ -28,9 +28,3 @@ public sealed class LancamentosApiFactory : WebApplicationFactory<Program>, IAsy
         await _postgres.DisposeAsync();
     }
 }
-
-[CollectionDefinition(Nome)]
-public sealed class LancamentosApiCollection : ICollectionFixture<LancamentosApiFactory>
-{
-    public const string Nome = "Lancamentos.Api";
-}

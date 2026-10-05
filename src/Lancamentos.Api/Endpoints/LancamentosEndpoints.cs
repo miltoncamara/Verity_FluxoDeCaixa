@@ -6,13 +6,6 @@ using Npgsql;
 
 namespace Lancamentos.Api.Endpoints;
 
-public sealed record NovoLancamentoRequest(DateOnly? Data, string? Tipo, decimal? Valor, string? Descricao);
-
-public sealed record LancamentoResponse(Guid Id, DateOnly Data, string Tipo, decimal Valor, string Descricao, DateTimeOffset CriadoEm)
-{
-    public static LancamentoResponse De(Lancamento l) => new(l.Id, l.Data, l.Tipo.ToString(), l.Valor, l.Descricao, l.CriadoEm);
-}
-
 public static class LancamentosEndpoints
 {
     public static void MapLancamentosEndpoints(this WebApplication app)
