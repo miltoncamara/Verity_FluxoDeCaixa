@@ -1,5 +1,6 @@
 using Lancamentos.Api.Data;
 using Lancamentos.Api.Endpoints;
+using Lancamentos.Api.Messaging;
 using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -10,6 +11,7 @@ builder.Services.AddDbContext<LancamentosDbContext>(options => options
         builder.Configuration.GetConnectionString("Lancamentos"),
         npgsql => npgsql.EnableRetryOnFailure())
     .UseSnakeCaseNamingConvention());
+builder.Services.AddHostedService<OutboxPublisher>();
 
 var app = builder.Build();
 
