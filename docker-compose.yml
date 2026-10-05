@@ -1,0 +1,71 @@
+# Sobe toda a solução: docker compose up --build
+# As senhas abaixo têm padrão "local-dev" apenas para rodar localmente. Veja .env.example.
+
+name: fluxo-caixa
+
+services:
+  postgres-lancamentos:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: lancamentos
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-local-dev}
+    ports:
+      - "15432:5432"
+    volumes:
+      - lancamentos-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d lancamentos"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  postgres-consolidado:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: consolidado
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-local-dev}
+    ports:
+      - "15433:5432"
+    volumes:
+      - consolidado-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d consolidado"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:4-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: fluxo
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-local-dev}
+    ports:
+      - "5672:5672"
+      - "15672:15672" # painel de administração: http://localhost:15672
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  lancamentos-api:
+    build:
+      context: .
+      dockerfile: src/Lancamentos.Api/Dockerfile
+    environment:
+      ConnectionStrings__Lancamentos: "Host=postgres-lancamentos;Database=lancamentos;Username=postgres;Password=${POSTGRES_PASSWORD:-local-dev}"
+    ports:
+      - "5001:8080"
+    depends_on:
+      postgres-lancamentos:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  lancamentos-data:
+  consolidado-data:
+  rabbitmq-data:
