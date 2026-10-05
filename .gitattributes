@@ -1,0 +1,3 @@
+# Normaliza fins de linha no repositório. Scripts shell precisam de LF para rodar no Linux e no CI.
+* text=auto
+*.sh text eol=lf
