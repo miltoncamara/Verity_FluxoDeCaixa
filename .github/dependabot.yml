@@ -1,0 +1,28 @@
+# Abre pull requests semanais com atualizações de dependências, inclusive correções de segurança.
+version: 2
+updates:
+  - package-ecosystem: nuget
+    directory: "/"
+    schedule:
+      interval: weekly
+    groups:
+      # As bibliotecas do EF Core e do Npgsql precisam andar juntas.
+      entity-framework:
+        patterns: ["Microsoft.EntityFrameworkCore*", "Npgsql*", "EFCore.*"]
+      testes:
+        patterns: ["xunit*", "Testcontainers*", "Microsoft.AspNetCore.Mvc.Testing"]
+
+  - package-ecosystem: docker
+    directories: ["/src/Lancamentos.Api", "/src/Consolidado.Api"]
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: docker-compose
+    directory: "/"
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly

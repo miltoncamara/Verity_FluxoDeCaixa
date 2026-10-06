@@ -1,0 +1,30 @@
+# Análise estática de segurança do código C# (injeção, criptografia fraca, dados sensíveis em log e outros).
+# Os alertas aparecem na aba Security do repositório.
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "0 6 * * 1" # toda segunda-feira, para pegar regras novas mesmo sem mudança no código
+
+jobs:
+  analisar:
+    name: Análise do C#
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v5
+
+      # build-mode none analisa o código sem compilar, então não depende da versão do SDK.
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: csharp
+          build-mode: none
+          queries: security-and-quality
+
+      - uses: github/codeql-action/analyze@v4

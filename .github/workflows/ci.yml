@@ -20,6 +20,12 @@ jobs:
       - name: Restore
         run: dotnet restore FluxoCaixa.slnx
 
+      # Falha o build se algum pacote, direto ou transitivo, tiver vulnerabilidade conhecida.
+      - name: Pacotes com vulnerabilidade conhecida
+        run: |
+          dotnet list FluxoCaixa.slnx package --vulnerable --include-transitive | tee vulneraveis.txt
+          if grep -q "has the following vulnerable packages" vulneraveis.txt; then exit 1; fi
+
       - name: Build
         run: dotnet build FluxoCaixa.slnx --no-restore -c Release
 
