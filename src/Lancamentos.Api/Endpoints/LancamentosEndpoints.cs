@@ -1,3 +1,4 @@
+using System.Globalization;
 using Lancamentos.Api.Data;
 using Lancamentos.Api.Domain;
 using Microsoft.AspNetCore.Mvc;
@@ -54,11 +55,15 @@ public static class LancamentosEndpoints
         return Results.Created($"/lancamentos/{lancamento.Id}", LancamentoResponse.De(lancamento));
     }
 
-    private static async Task<IResult> ListarPorData([FromQuery] DateOnly data, LancamentosDbContext db, CancellationToken ct)
+    private static async Task<IResult> ListarPorData([FromQuery] string? data, LancamentosDbContext db, CancellationToken ct)
     {
+        // Aceita somente yyyy-MM-dd. Sem isso o ASP.NET aceitaria "07-10-2026" e leria como 10 de julho.
+        if (!DateOnly.TryParseExact(data, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var dia))
+            return Results.ValidationProblem(new Dictionary<string, string[]> { ["data"] = ["Informe a data no formato yyyy-MM-dd."] });
+
         var lancamentos = await db.Lancamentos
             .AsNoTracking()
-            .Where(l => l.Data == data)
+            .Where(l => l.Data == dia)
             .OrderBy(l => l.CriadoEm)
             .ToListAsync(ct);
 

@@ -117,6 +117,25 @@ public class LancamentosEndpointsTests(LancamentosApiFactory factory)
         Assert.Equal(eventosAntes, await db.Outbox.CountAsync(Ct));
     }
 
+    [Theory]
+    [InlineData("""{"data":"07/10/2026","tipo":"Credito","valor":10,"descricao":"Data no formato errado"}""")]
+    [InlineData("""{"data":"2026-10-07","tipo":"Credito","valor":"dez","descricao":"Valor como texto"}""")]
+    [InlineData("""{"data":"2026-10-07",""")]
+    public async Task Corpo_que_nao_pode_ser_lido_retorna_400(string corpo)
+    {
+        var resposta = await _client.PostAsync("/lancamentos",
+            new StringContent(corpo, System.Text.Encoding.UTF8, "application/json"), Ct);
+
+        Assert.Equal(HttpStatusCode.BadRequest, resposta.StatusCode);
+    }
+
+    [Fact]
+    public async Task Get_sem_data_ou_com_data_invalida_retorna_400()
+    {
+        Assert.Equal(HttpStatusCode.BadRequest, (await _client.GetAsync("/lancamentos", Ct)).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await _client.GetAsync("/lancamentos?data=07-10-2026", Ct)).StatusCode);
+    }
+
     [Fact]
     public async Task Get_por_data_retorna_somente_lancamentos_do_dia()
     {

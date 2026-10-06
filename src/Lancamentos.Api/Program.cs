@@ -34,7 +34,12 @@ builder.Services.AddHealthChecks().AddAsyncCheck("postgres", async ct =>
 
 var app = builder.Build();
 
-app.UseExceptionHandler();
+// Erro de leitura da requisição (JSON inválido, data em formato errado, parâmetro faltando) responde 400.
+// Sem isso, no ambiente Development o ASP.NET lança a exceção e o handler devolveria 500.
+app.UseExceptionHandler(new ExceptionHandlerOptions
+{
+    StatusCodeSelector = ex => ex is BadHttpRequestException erro ? erro.StatusCode : StatusCodes.Status500InternalServerError
+});
 app.UseStatusCodePages();
 app.UseMiddleware<ApiKeyMiddleware>();
 
