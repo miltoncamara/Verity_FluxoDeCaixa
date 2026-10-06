@@ -439,7 +439,7 @@ A arquitetura alvo na Azure está em [docs/arquitetura-azure.md](docs/arquitetur
 | Autenticação | JWT emitido pelo Microsoft Entra ID, com escopos separados para leitura e escrita |
 | Observabilidade | O mesmo OpenTelemetry Collector enviando para Azure Monitor ou Datadog, com alertas sobre as métricas que as APIs já emitem |
 | Negócio | Estorno de lançamentos e suporte a vários comerciantes |
-| Infraestrutura | Infraestrutura como código com Bicep |
+| Infraestrutura | Infraestrutura como código com Bicep ou Terraform |
 
 ## Documentação detalhada
 

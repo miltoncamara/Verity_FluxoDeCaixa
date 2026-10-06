@@ -40,7 +40,7 @@ flowchart TB
         LDbGeo[(Réplica geográfica<br/>lancamentos)]
         CDbGeo[(Réplica geográfica<br/>consolidado)]
         SBGeo{{Service Bus<br/>Geo-Replication}}
-        AKS2[AKS em espera<br/>mesmo Bicep]
+        AKS2[AKS em espera<br/>mesmo código de infraestrutura]
     end
 
     Cliente -- HTTPS --> FD
@@ -73,7 +73,7 @@ flowchart TB
 | Variáveis de ambiente com padrão `local-dev` | **Azure Key Vault** com **workload identity** | Nenhum segredo em variável de ambiente nem no repositório. O acesso ao PostgreSQL pode usar autenticação do Entra ID, sem senha |
 | API Key no header `X-Api-Key` | **Microsoft Entra ID** com JWT e escopos (`lancamentos.escrita`, `consolidado.leitura`) | Identidade por usuário ou aplicação, com expiração e revogação. O **Azure API Management** pode ficar na frente, se a empresa já o usar para governança de APIs |
 | OpenTelemetry Collector e Aspire Dashboard | **Azure Monitor** com **Application Insights**, recebendo do mesmo collector | Mesma instrumentação, com retenção, alertas e dashboards gerenciados |
-| docker-compose.yml | **Bicep**, aplicado por pipeline | Toda a infraestrutura versionada e reproduzível, inclusive a região secundária |
+| docker-compose.yml | **Bicep** ou **Terraform**, aplicado por pipeline | Toda a infraestrutura versionada e reproduzível, inclusive a região secundária |
 
 ## Escalabilidade
 
@@ -109,7 +109,7 @@ Estratégia **ativo-passivo**: uma região atende e a outra fica pronta para ass
 |---|---|---|
 | PostgreSQL de lançamentos e do consolidado | **Réplica de leitura em outra região** com **virtual endpoints**. No desastre, a réplica é promovida a primária e o endpoint passa a apontar para ela, sem mudar a connection string | Segundos. A replicação entre regiões é assíncrona |
 | Service Bus | **Geo-Replication** do tier Premium, que replica metadados e mensagens. A região secundária é promovida e o mesmo hostname passa a apontar para ela | Configurável entre replicação síncrona e assíncrona |
-| AKS e demais recursos | Mesmo Bicep aplicado na região secundária. Pode ficar mínimo (warm standby) ou ser criado só no desastre | Não guarda dados |
+| AKS e demais recursos | O mesmo código de infraestrutura aplicado na região secundária. Pode ficar mínimo (warm standby) ou ser criado só no desastre | Não guarda dados |
 | Front Door | Health probes nas duas regiões e failover automático do roteamento | Não guarda dados |
 
 > **Sobre "failover group":** esse recurso é do **Azure SQL Database** (auto-failover groups). No PostgreSQL Flexible Server, o equivalente é a réplica geográfica com virtual endpoints, descrita acima. Se a empresa preferir Azure SQL, os auto-failover groups fazem esse papel, mas a troca de banco exigiria adaptar o SQL do `ON CONFLICT` para `MERGE`.
@@ -180,12 +180,17 @@ O domínio, a outbox, o upsert idempotente, os endpoints e os testes de domínio
 
 ## Infraestrutura como código
 
-Módulos Bicep sugeridos, aplicados pelo pipeline em cada região:
+Toda a infraestrutura fica versionada e é aplicada pelo pipeline em cada região, com **Bicep** ou **Terraform**:
 
-- `rede.bicep`: VNet, subnets e zonas DNS privadas
-- `aks.bicep`: cluster, node pools em zonas e workload identity
-- `postgres.bicep`: os dois Flexible Servers, HA zone-redundant, réplicas de leitura e geográficas e virtual endpoints
-- `servicebus.bicep`: namespace Premium, tópico, assinatura com `MaxDeliveryCount` 5 e geo-replicação
-- `redis.bicep`, `keyvault.bicep`, `frontdoor.bicep` e `monitor.bicep`
+- **Bicep** é a opção nativa da Azure, sem arquivo de estado para guardar e com suporte imediato a recursos novos.
+- **Terraform** é a opção quando a empresa já o usa ou quando a infraestrutura envolve outros provedores além da Azure, como o Datadog. O estado fica numa conta de armazenamento da Azure, com bloqueio.
+
+A escolha depende do padrão da empresa. A organização em módulos é a mesma nos dois casos:
+
+- `rede`: VNet, subnets e zonas DNS privadas
+- `aks`: cluster, node pools em zonas e workload identity
+- `postgres`: os dois Flexible Servers, HA zone-redundant, réplicas de leitura e geográficas e virtual endpoints
+- `servicebus`: namespace Premium, tópico, assinatura com `MaxDeliveryCount` 5 e geo-replicação
+- `redis`, `keyvault`, `frontdoor` e `monitor`
 
 Os manifestos do Kubernetes (deployments, HPA, KEDA ScaledObject, PodDisruptionBudget) ficariam num chart Helm por serviço.

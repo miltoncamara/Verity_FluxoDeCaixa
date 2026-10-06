@@ -207,7 +207,7 @@ A arquitetura alvo na Azure, com diagrama, equivalência de cada peça, escalabi
 | Cache em memória | Azure Managed Redis |
 | API Key e variáveis de ambiente | Microsoft Entra ID, Key Vault e workload identity |
 | OpenTelemetry Collector e Aspire Dashboard | O mesmo collector enviando para o Azure Monitor e o Application Insights |
-| docker-compose.yml | Bicep |
+| docker-compose.yml | Bicep ou Terraform |
 
 ### No negócio
 
