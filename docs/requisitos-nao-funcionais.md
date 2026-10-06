@@ -28,6 +28,47 @@ Os números de carga foram medidos numa única máquina (Windows 11 com Docker D
 - **Limite de 2 s na leitura do banco.** Sem esse limite, as retentativas do EF Core segurariam a requisição por quase um minuto com o banco fora. A 50 req/s isso esgotaria as conexões e derrubaria a API inteira.
 - **Escrita isolada da leitura.** As escritas no saldo chegam pelo consumidor, num ritmo controlado pelo prefetch da fila. Um pico de lançamentos não disputa recursos com as consultas de forma descontrolada.
 
+## Escalabilidade
+
+O requisito é lidar com o aumento da carga sem degradação significativa do desempenho, com dimensionamento horizontal, balanceamento de carga e cache.
+
+### Como cada peça escala
+
+| Peça | Estratégia | Onde está |
+|---|---|---|
+| Lancamentos.Api | Réplicas sem estado atrás do nginx, em round robin | `docker-compose.yml` com 2 réplicas e [nginx.conf](../infra/nginx/nginx.conf) |
+| Publicador da outbox | Roda em todas as réplicas, mas um advisory lock do PostgreSQL deixa só uma publicar por vez. Não duplica, mantém a ordem e tem failover automático | [OutboxPublisher.cs](../src/Lancamentos.Api/Messaging/OutboxPublisher.cs) |
+| Consolidado.Api | Réplicas sem estado atrás do nginx, com hash pela URL para cada data cair sempre na mesma réplica e aproveitar o cache | `nginx.conf` |
+| Consumidor | Consumidores concorrentes na mesma fila. A idempotência e o upsert atômico garantem o resultado com qualquer número de réplicas | [AtualizadorDeSaldo.cs](../src/Consolidado.Api/Data/AtualizadorDeSaldo.cs) |
+| Leitura do saldo | Saldo pré-calculado lido por chave e cache em memória de 5 s | [ADR 0005](adr/0005-saldo-pre-calculado.md) |
+
+As decisões estão no [ADR 0008](adr/0008-escalabilidade-horizontal.md). A escala na Azure, com HPA, KEDA, Redis e réplica de leitura, está na [arquitetura alvo](arquitetura-azure.md#escalabilidade).
+
+### O que foi comprovado
+
+| Teste | Resultado |
+|---|---|
+| Duas réplicas publicando a outbox ao mesmo tempo | 100 eventos, 100 mensagens, na ordem de criação. Sem o lock, eram 200 mensagens |
+| Uma réplica da Lancamentos.Api parada no meio do teste de caos | 442 POSTs, 0 falhas. O nginx mandou tudo para a outra réplica |
+| Capacidade com 1 réplica da Consolidado.Api | Até 10.000 req/s dentro do SLO: 0% de perda e p95 de 9,7 ms ([resultado](carga/capacidade-1-replica.md)) |
+| Capacidade com 2 réplicas da Consolidado.Api | Até 10.000 req/s dentro do SLO: 0% de perda e p95 de 23,4 ms ([resultado](carga/capacidade-2-replicas.md)) |
+
+### Como ler os números de capacidade
+
+- **Uma única réplica aguenta 200 vezes o requisito.** O requisito é 50 req/s, e uma réplica atende 10.000 req/s com p95 abaixo de 10 ms. Numa sondagem extra, a saturação começou entre 12.000 e 16.000 req/s.
+- **Localmente, a segunda réplica não aumenta a capacidade.** O k6, o nginx, as réplicas e o PostgreSQL dividem a mesma CPU. Com duas réplicas, elas disputam o mesmo processador, e a 10.000 req/s o p95 até sobe. O teto medido é o da máquina, e não o da arquitetura.
+- **O ganho real de capacidade aparece com réplicas em máquinas diferentes,** como nos nós do AKS. O que o teste local comprova é que a escala horizontal funciona corretamente: o balanceamento distribui a carga, a queda de uma réplica não gera erro, o publicador não duplica eventos e os consumidores concorrentes mantêm o saldo exato.
+- Antes de cada medição, 15 s de aquecimento ficam fora do relatório. Sem isso, o primeiro degrau media a partida a frio da réplica recém-criada (JIT e pool de conexões vazios), e não a capacidade.
+
+### Gargalos conhecidos
+
+| Gargalo | Quando aparece | Mitigação |
+|---|---|---|
+| Linha do dia em `saldo_diario` | Todos os eventos do mesmo dia atualizam a mesma linha, e o banco serializa essas atualizações | O PostgreSQL faz milhares por segundo, muito acima do cenário. Se um dia não bastar, contadores parciais por partição somados na leitura |
+| Publicação da outbox | Só uma réplica publica por vez | Uma instância publica centenas de eventos por segundo. Se precisar, particionar a outbox com um lock por partição |
+| Escrita no banco de lançamentos | Um único servidor primário | Escala vertical e, depois, particionamento da tabela por data |
+| Cache por réplica | Cada réplica tem o seu cache | Afinidade por data no nginx hoje. Redis compartilhado na Azure |
+
 ## Definição de perda
 
 Uma requisição é considerada **perdida** quando:
@@ -46,7 +87,8 @@ A tabela mostra o efeito de cada falha nos dois serviços, como a solução se r
 
 | Falha | Efeito em lançamentos | Efeito no consolidado | Recuperação | Verificado em |
 |---|---|---|---|---|
-| **Consolidado.Api cai** (processo inteiro) | Nenhum. Os POSTs continuam com `201` | A consulta fica indisponível. Os eventos se acumulam na fila, que é durável | Ao subir, o consumidor reconecta e processa a fila. Mensagens que estavam sem ack voltam para a fila e a idempotência evita soma dupla | `caos.sh` |
+| **Uma réplica de uma API cai ou é reiniciada** (deploy, scale-in) | Nenhum. O nginx manda as requisições para a outra réplica. Se a réplica parada era a que publicava a outbox, outra assume no ciclo seguinte | Nenhum. As outras réplicas continuam consumindo e respondendo | O nginx redescobre as réplicas pelo DNS do Docker a cada 5 s | `caos.sh` (uma réplica parada no meio do envio, 0 falhas) e `Duas_replicas_publicando_ao_mesmo_tempo_nao_duplicam_nem_desordenam_eventos` |
+| **Consolidado.Api cai** (todas as réplicas) | Nenhum. Os POSTs continuam com `201` | A consulta fica indisponível. Os eventos se acumulam na fila, que é durável | Ao subir, o consumidor reconecta e processa a fila. Mensagens que estavam sem ack voltam para a fila e a idempotência evita soma dupla | `caos.sh` |
 | **Consumidor para, mas a API continua de pé** | Nenhum | A consulta responde, mas o saldo para de avançar. A resposta não vem marcada como desatualizada, porque o banco está no ar | O consumidor reconecta sozinho a cada 5 s quando perde a conexão. Para um consumidor travado, a proteção é monitorar o tamanho da fila (evolução) | `caos.sh` (reconexão após a volta do RabbitMQ) |
 | **Banco do consolidado cai** | Nenhum | A consulta responde o último valor conhecido com `X-Stale-Data: true` e `Age`. Um dia nunca lido recebe `503` com `Retry-After`. O health check fica `503`. O consumidor segura a mensagem sem ack e tenta de novo a cada 5 s, sem gastar tentativas | Quando o banco volta, a mensagem retida é aplicada e o consumo continua | `BancoForaDoArTests` e validação manual na fase 3 |
 | **RabbitMQ cai** | Nenhum. Os eventos ficam pendentes na outbox | A consulta responde normalmente, mas o saldo para de avançar | O publicador tenta de novo a cada 5 s e publica os pendentes em ordem quando o RabbitMQ volta. As mensagens já publicadas são persistentes e sobrevivem ao restart | `caos.sh` (85 eventos retidos na outbox), `Post_e_confirmado_mesmo_com_rabbitmq_fora_do_ar...` |
@@ -71,5 +113,5 @@ A tabela mostra o efeito de cada falha nos dois serviços, como a solução se r
 - **Banco do consolidado fora por muito tempo.** Uma mensagem pode ficar sem ack por até 30 minutos, que é o `consumer_timeout` padrão do RabbitMQ. Depois disso o broker fecha o canal e a mensagem volta para a fila, contando uma entrega. Uma queda de mais de duas horas e meia (cinco ciclos de 30 minutos) levaria a mensagem para a DLQ. Ela pode ser reprocessada com segurança depois.
 - **Quedas repetidas do consumidor.** Uma queda com mensagens sem ack também conta uma entrega para elas. Cinco quedas seguidas com a mesma mensagem em mãos a mandariam para a DLQ.
 - **Saldo desatualizado sem aviso.** Se o consumidor travar com o banco no ar, a consulta não sabe que o saldo está atrasado. A mitigação é alertar pela idade do evento mais antigo na fila e na outbox.
-- **Cache por instância.** Com várias réplicas da Consolidado.Api, cada uma tem o seu cache e o seu último valor conhecido. Um cache distribuído (Redis) resolveria.
+- **Cache por instância.** Cada réplica da Consolidado.Api tem o seu cache e o seu último valor conhecido. O nginx compensa isso mandando cada data sempre para a mesma réplica. Se essa réplica cair, a outra começa sem cache para aquela data. Um cache distribuído (Redis) resolveria.
 - **Atraso adicional de até 5 s.** O cache soma até 5 s ao atraso natural da consistência eventual.

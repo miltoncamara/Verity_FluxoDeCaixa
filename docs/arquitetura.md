@@ -24,10 +24,11 @@ A seta pontilhada é a única ligação entre os serviços: eventos assíncronos
 ```mermaid
 flowchart TB
     Comerciante([Comerciante])
+    Nginx[nginx<br/>balanceador de carga<br/>portas 5001 e 5002]
 
     subgraph Lancamentos[Serviço de lançamentos]
-        LApi[Lancamentos.Api<br/>ASP.NET Core Minimal API<br/>POST e GET /lancamentos]
-        Pub[OutboxPublisher<br/>BackgroundService na mesma aplicação]
+        LApi[Lancamentos.Api x2 réplicas<br/>ASP.NET Core Minimal API<br/>POST e GET /lancamentos]
+        Pub[OutboxPublisher<br/>em cada réplica, só uma publica por vez]
         LDb[(PostgreSQL lancamentos<br/>tabelas lancamentos e outbox)]
     end
 
@@ -39,13 +40,14 @@ flowchart TB
     end
 
     subgraph Consolidado[Serviço de consolidado]
-        Cons[LancamentoRegistradoConsumer<br/>BackgroundService na mesma aplicação]
-        CApi[Consolidado.Api<br/>ASP.NET Core Minimal API<br/>GET /consolidado/data<br/>cache em memória]
+        Cons[LancamentoRegistradoConsumer<br/>em cada réplica, consumidores concorrentes]
+        CApi[Consolidado.Api x2 réplicas<br/>ASP.NET Core Minimal API<br/>GET /consolidado/data<br/>cache em memória]
         CDb[(PostgreSQL consolidado<br/>tabelas saldo_diario e eventos_processados)]
     end
 
-    Comerciante -- HTTP com X-Api-Key --> LApi
-    Comerciante -- HTTP com X-Api-Key --> CApi
+    Comerciante -- HTTP com X-Api-Key --> Nginx
+    Nginx -- round robin --> LApi
+    Nginx -- hash pela URL --> CApi
     LApi -- lançamento + evento na mesma transação --> LDb
     Pub -- lê pendentes e marca publicados --> LDb
     Pub -- publish persistente, mandatory, com confirmação --> Ex
@@ -59,13 +61,16 @@ flowchart TB
 
 | Container | Responsabilidade | Depende de |
 |---|---|---|
+| nginx | Distribui as requisições entre as réplicas. Round robin nos lançamentos e hash pela URL no consolidado, para cada data cair sempre na mesma réplica e aproveitar o cache | As réplicas das APIs, descobertas pelo DNS do Docker |
 | Lancamentos.Api | Valida e grava lançamentos. Grava o evento na outbox | Somente o PostgreSQL de lançamentos |
-| OutboxPublisher | Publica os eventos pendentes no RabbitMQ, em ordem | PostgreSQL de lançamentos e RabbitMQ. Se o RabbitMQ estiver fora, espera e tenta de novo |
+| OutboxPublisher | Publica os eventos pendentes no RabbitMQ, em ordem. Roda em todas as réplicas, mas um advisory lock do PostgreSQL deixa só uma publicar por vez | PostgreSQL de lançamentos e RabbitMQ. Se o RabbitMQ estiver fora, espera e tenta de novo |
 | RabbitMQ | Guarda e entrega os eventos | Nada |
-| LancamentoRegistradoConsumer | Aplica cada evento ao saldo do dia, uma única vez | RabbitMQ e PostgreSQL do consolidado |
+| LancamentoRegistradoConsumer | Aplica cada evento ao saldo do dia, uma única vez. As réplicas consomem a mesma fila em paralelo | RabbitMQ e PostgreSQL do consolidado |
 | Consolidado.Api | Responde o saldo de um dia | PostgreSQL do consolidado. Se ele cair, usa o último valor conhecido em memória |
 
 O publicador e o consumidor rodam como `BackgroundService` dentro das APIs. Isso simplifica a entrega e a execução local. Em produção cada um pode virar um processo separado sem mudar o código das classes (ver [ADR 0007](adr/0007-simplificacoes-assumidas.md)).
+
+O docker compose sobe 2 réplicas de cada API. O número pode ser mudado com `docker compose up -d --scale consolidado-api=3`. As decisões de escalabilidade estão no [ADR 0008](adr/0008-escalabilidade-horizontal.md).
 
 ## Sequência do registro de um lançamento
 
@@ -184,16 +189,17 @@ Os Ids usam UUID versão 7, que é ordenado pelo tempo e evita fragmentação do
 
 ### Na nuvem (Azure)
 
-| Tema | Hoje | Evolução |
-|---|---|---|
-| Hospedagem | docker compose | Azure Kubernetes Service (AKS). Cada serviço com seu deployment, réplicas e Horizontal Pod Autoscaler. O consumidor vira um deployment separado da API de leitura, para escalar cada um pela sua própria carga |
-| Mensageria | RabbitMQ em container | Azure Service Bus com tópico e assinatura. Dead-lettering, contagem de entregas e reentrega já vêm prontos. Sessões permitem ordenação por chave se necessário |
-| Banco de dados | PostgreSQL em container | Azure Database for PostgreSQL Flexible Server com alta disponibilidade zone-redundant e backups automáticos. Um servidor por serviço, para manter o isolamento de falhas |
-| Segredos | Variáveis de ambiente com padrão local | Azure Key Vault, lido pela aplicação com managed identity. Nenhuma senha em variável de ambiente |
-| Cache | Memória de cada instância | Azure Cache for Redis. Todas as réplicas compartilham o mesmo cache e o último valor conhecido sobrevive a um restart |
-| Autenticação | API Key compartilhada | JWT emitido pelo Microsoft Entra ID, com escopos separados como `lancamentos.escrita` e `consolidado.leitura` |
-| Observabilidade | Logs no console | OpenTelemetry com Azure Monitor. Trace do POST até a atualização do saldo, métricas da idade do evento mais antigo da outbox e do tamanho da fila, alerta para qualquer mensagem na DLQ |
-| Infraestrutura | docker-compose.yml | Bicep para todos os recursos, aplicado pelo pipeline de CI/CD |
+A arquitetura alvo na Azure, com diagrama, equivalência de cada peça, escalabilidade, alta disponibilidade e recuperação de desastre, está em [arquitetura-azure.md](arquitetura-azure.md). Em resumo:
+
+| Hoje | Na Azure |
+|---|---|
+| nginx e réplicas no docker compose | Azure Front Door com WAF e AKS com HPA e KEDA, em 3 zonas |
+| RabbitMQ | Azure Service Bus Premium, com zonas e geo-replicação |
+| PostgreSQL em container | Azure Database for PostgreSQL Flexible Server com HA zone-redundant, réplica de leitura e réplica geográfica com virtual endpoints |
+| Cache em memória | Azure Managed Redis |
+| API Key e variáveis de ambiente | Microsoft Entra ID, Key Vault e workload identity |
+| Logs no console | OpenTelemetry com Azure Monitor e Application Insights |
+| docker-compose.yml | Bicep |
 
 ### No negócio
 
@@ -202,7 +208,7 @@ Os Ids usam UUID versão 7, que é ordenado pelo tempo e evita fragmentação do
 
 ### Melhorias técnicas
 
-- **Vários publicadores da outbox.** Com mais de uma réplica da Lancamentos.Api, dois publicadores podem publicar o mesmo evento. O consumidor idempotente já absorve isso. Para evitar o trabalho repetido, a leitura passaria a usar `SELECT ... FOR UPDATE SKIP LOCKED`.
+- **Publicação em paralelo.** Hoje só uma réplica publica por vez, o que é muito acima do necessário. Se a vazão de eventos crescer muito, a outbox pode ser particionada, com um lock por partição.
 - **Migrations no pipeline.** Hoje cada API aplica as migrations ao subir. Em produção isso vira uma etapa do deploy, antes da troca de versão.
 - **Reprocessamento da DLQ.** Uma rotina para devolver mensagens da DLQ para a fila principal depois que a causa for corrigida. Como o consumidor é idempotente, reprocessar é seguro.
 - **Paginação.** O `GET /lancamentos` devolve todos os lançamentos do dia. Com volume alto, ele precisaria de paginação.

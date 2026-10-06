@@ -27,9 +27,10 @@ Stack: .NET 10, ASP.NET Core Minimal APIs, PostgreSQL com EF Core, RabbitMQ (Rab
 ```mermaid
 flowchart LR
     Cliente([Comerciante])
+    Nginx[nginx<br/>balanceador de carga]
 
     subgraph Lancamentos[Serviço de lançamentos]
-        LApi[Lancamentos.Api]
+        LApi[Lancamentos.Api<br/>2 réplicas]
         Pub[Publicador da outbox<br/>BackgroundService]
         LDb[(PostgreSQL<br/>lancamentos + outbox)]
     end
@@ -38,12 +39,13 @@ flowchart LR
 
     subgraph Consolidado[Serviço de consolidado]
         Cons[Consumidor<br/>BackgroundService]
-        CApi[Consolidado.Api<br/>cache em memória]
+        CApi[Consolidado.Api<br/>2 réplicas, cache em memória]
         CDb[(PostgreSQL<br/>saldo_diario + eventos_processados)]
     end
 
-    Cliente -- POST /lancamentos --> LApi
-    Cliente -- GET /consolidado/data --> CApi
+    Cliente --> Nginx
+    Nginx -- POST /lancamentos --> LApi
+    Nginx -- GET /consolidado/data --> CApi
     LApi -- mesma transação --> LDb
     Pub -- lê pendentes --> LDb
     Pub -- publica com confirmação --> Rabbit
@@ -60,7 +62,9 @@ O fluxo de um lançamento:
 4. O consumidor, que roda dentro da Consolidado.Api, recebe o evento e atualiza a tabela `saldo_diario` de forma idempotente. Só depois do commit ele confirma a mensagem.
 5. A Consolidado.Api responde o saldo de um dia lendo essa tabela por chave, com cache em memória de 5 s.
 
-Os diagramas de contexto, de containers e de sequência estão em [docs/arquitetura.md](docs/arquitetura.md).
+Cada API roda com 2 réplicas atrás de um nginx, que distribui a carga. Só uma réplica publica a outbox por vez, e as réplicas do consolidado consomem a mesma fila em paralelo ([ADR 0008](docs/adr/0008-escalabilidade-horizontal.md)).
+
+Os diagramas de contexto, de containers e de sequência estão em [docs/arquitetura.md](docs/arquitetura.md). A arquitetura alvo na Azure está em [docs/arquitetura-azure.md](docs/arquitetura-azure.md).
 
 ## Invariante central
 
@@ -82,17 +86,23 @@ Pré-requisito: Docker com Docker Compose.
 docker compose up -d --build
 ```
 
-Esse comando sobe os dois bancos, o RabbitMQ e as duas APIs. Na primeira vez o build das imagens leva alguns minutos.
+Esse comando sobe os dois bancos, o RabbitMQ, 2 réplicas de cada API e o nginx na frente delas. Na primeira vez o build das imagens leva alguns minutos.
 
 | Serviço | Endereço |
 |---|---|
-| Lancamentos.Api | http://localhost:5001 |
-| Consolidado.Api | http://localhost:5002 |
+| Lancamentos.Api (via nginx) | http://localhost:5001 |
+| Consolidado.Api (via nginx) | http://localhost:5002 |
 | Painel do RabbitMQ | http://localhost:15672 (usuário `fluxo`, senha `local-dev`) |
 | PostgreSQL de lançamentos | localhost:15432 |
 | PostgreSQL do consolidado | localhost:15433 |
 
 As APIs exigem o header `X-Api-Key`. Localmente a chave é `local-dev-key`.
+
+Toda resposta traz o header `X-Upstream-Addr`, que mostra qual réplica atendeu. Para mudar o número de réplicas:
+
+```bash
+docker compose up -d --scale lancamentos-api=3 --scale consolidado-api=3
+```
 
 As senhas e a API Key têm valores padrão `local-dev` só para os containers descartáveis desta máquina. Para trocar, copie `.env.example` para `.env` e altere os valores. Nenhum segredo real fica no repositório. Em produção esses valores viriam de um cofre como o Azure Key Vault.
 
@@ -104,7 +114,7 @@ docker compose down -v
 
 ### Rodando as APIs fora do Docker
 
-Para depurar, suba só a infraestrutura com Docker e rode as APIs com o .NET 10 SDK. O ambiente `Development` já aponta para as portas acima.
+Para depurar, suba só a infraestrutura com Docker e rode as APIs com o .NET 10 SDK. O ambiente `Development` já aponta para as portas dos bancos e do RabbitMQ. Nesse modo não há nginx: cada API atende direto nas portas 5001 e 5002.
 
 ```bash
 docker compose up -d postgres-lancamentos postgres-consolidado rabbitmq
@@ -198,10 +208,10 @@ Pré-requisitos: .NET 10 SDK e Docker rodando. Os testes de integração usam Te
 dotnet test --solution FluxoCaixa.slnx
 ```
 
-São 58 testes, executados em cerca de 35 segundos:
+São 59 testes, executados em cerca de 40 segundos:
 
 - **Unitários:** validações da entidade `Lancamento` e cálculo do saldo em `SaldoDiario`.
-- **Integração da Lancamentos.Api:** o POST grava o lançamento e a outbox juntos, a `Idempotency-Key` não duplica (inclusive com 10 requisições simultâneas), a API aceita lançamentos com o RabbitMQ fora, a publicação é ordenada, persistente e confirmada, além de API Key e health check.
+- **Integração da Lancamentos.Api:** o POST grava o lançamento e a outbox juntos, a `Idempotency-Key` não duplica (inclusive com 10 requisições simultâneas), a API aceita lançamentos com o RabbitMQ fora, a publicação é ordenada, persistente e confirmada, duas réplicas publicando ao mesmo tempo não duplicam eventos, além de API Key e health check.
 - **Integração da Consolidado.Api:** o consumidor soma corretamente, ignora evento duplicado, não perde atualizações concorrentes, manda mensagem inválida para a DLQ, limita as reentregas antes da DLQ, usa cache e responde o último valor conhecido com o banco fora.
 
 ### Carga com k6
@@ -214,13 +224,27 @@ bash scripts/carga.sh
 
 O k6 roda em um container, dentro da rede do compose. São 5 minutos a 50 req/s no `GET /consolidado`, seguidos de 2 minutos a 150 req/s. Durante o pico, 10 POSTs por segundo chegam à Lancamentos.Api. O resultado é salvo em [docs/carga/resultado-k6.md](docs/carga/resultado-k6.md).
 
+### Capacidade
+
+Com a solução no ar, mede até onde o consolidado aguenta com 1 e com 2 réplicas. A taxa sobe em degraus de 30 s, de 1.000 a 10.000 req/s:
+
+```bash
+bash scripts/capacidade.sh 1
+```
+
+```bash
+bash scripts/capacidade.sh 2
+```
+
+Os resultados ficam em [docs/carga](docs/carga).
+
 ### Caos
 
 ```bash
 bash scripts/caos.sh
 ```
 
-O script sobe tudo e envia lançamentos sem parar. Enquanto isso ele mata a Consolidado.Api e depois o RabbitMQ. Em seguida confirma que nenhum POST falhou, sobe tudo de novo e verifica que o saldo convergiu para o valor exato. O último resultado está em [docs/caos/resultado-caos.md](docs/caos/resultado-caos.md).
+O script sobe tudo e envia lançamentos sem parar. Enquanto isso ele para uma réplica da Lancamentos.Api e sobe de novo, depois mata a Consolidado.Api e o RabbitMQ. Em seguida confirma que nenhum POST falhou, sobe tudo de novo e verifica que o saldo convergiu para o valor exato. O último resultado está em [docs/caos/resultado-caos.md](docs/caos/resultado-caos.md).
 
 ### Integração contínua
 
@@ -239,12 +263,15 @@ O workflow [ci.yml](.github/workflows/ci.yml) roda build e testes a cada push. D
 | A consulta continua respondendo com o banco do consolidado fora | Último valor conhecido em memória, com `X-Stale-Data` e `Age` | `Com_o_banco_fora_responde_o_ultimo_valor_conhecido_marcado_como_desatualizado` |
 | Repetir um POST não duplica o lançamento | `Idempotency-Key` com índice único no banco | `Post_repetido_com_mesma_idempotency_key_nao_duplica` e `Posts_simultaneos_com_mesma_idempotency_key...` |
 | Acesso restrito | API Key no header `X-Api-Key`, vinda de variável de ambiente | `ApiKeyTests` nos dois serviços |
+| Escalabilidade: aguentar mais carga sem degradar | Réplicas sem estado atrás de um balanceador. Publicador único por advisory lock. Consumidores concorrentes. Cache com afinidade por data ([ADR 0008](docs/adr/0008-escalabilidade-horizontal.md)) | `Duas_replicas_publicando_ao_mesmo_tempo...`, o caos com uma réplica parada (0 falhas) e o teste de capacidade: até 10.000 req/s com 0% de perda e p95 abaixo de 25 ms, com 1 e com 2 réplicas ([resultados](docs/carga)) |
 
 Os SLOs, a definição de perda e a tabela completa de modos de falha estão em [docs/requisitos-nao-funcionais.md](docs/requisitos-nao-funcionais.md).
 
 ## Estrutura do repositório
 
 ```
+infra/
+  nginx/                balanceador de carga local
 src/
   Contracts/            record do evento LancamentoRegistrado
   Lancamentos.Api/      Domain, Data (EF Core e outbox), Endpoints, Messaging (publicador), Seguranca
@@ -253,12 +280,13 @@ tests/
   Lancamentos.Tests/    unitários e integração (Testcontainers)
   Consolidado.Tests/    unitários e integração (Testcontainers)
   load/                 script k6
-scripts/                carga.sh e caos.sh
+scripts/                carga.sh, capacidade.sh e caos.sh
 docs/
   arquitetura.md
+  arquitetura-azure.md
   requisitos-nao-funcionais.md
   adr/                  decisões de arquitetura
-  carga/                resultado do k6
+  carga/                resultados do k6 (carga e capacidade)
   caos/                 resultado do teste de caos
 docker-compose.yml
 ```
@@ -278,22 +306,23 @@ A justificativa de cada simplificação está em [ADR 0007](docs/adr/0007-simpli
 
 ## Evolução futura
 
+A arquitetura alvo na Azure está em [docs/arquitetura-azure.md](docs/arquitetura-azure.md), com diagrama, escalabilidade, alta disponibilidade dentro da região e recuperação de desastre entre regiões.
+
 | Tema | Evolução |
 |---|---|
-| Hospedagem | Azure Kubernetes Service (AKS), com réplicas e autoscaling por serviço. O consumidor vira um deployment separado da API de leitura |
-| Mensageria | Azure Service Bus no lugar do RabbitMQ, com sessões, dead-lettering e reentrega nativos |
-| Banco de dados | Azure Database for PostgreSQL Flexible Server com alta disponibilidade zone-redundant |
-| Segredos | Azure Key Vault, acessado por managed identity |
-| Cache | Azure Cache for Redis, compartilhado entre as réplicas da Consolidado.Api |
+| Hospedagem | Azure Kubernetes Service (AKS) em 3 zonas, com HPA nas APIs e KEDA no consumidor, atrás do Azure Front Door com WAF |
+| Mensageria | Azure Service Bus Premium, com DLQ, contagem de entregas, detecção de duplicatas e geo-replicação |
+| Banco de dados | Azure Database for PostgreSQL Flexible Server com HA zone-redundant, réplica de leitura e réplica geográfica com virtual endpoints |
+| Segredos | Azure Key Vault, acessado por workload identity |
+| Cache | Azure Managed Redis, compartilhado entre as réplicas da Consolidado.Api |
 | Autenticação | JWT emitido pelo Microsoft Entra ID, com escopos separados para leitura e escrita |
-| Observabilidade | OpenTelemetry com traces do POST até a atualização do saldo, métricas de atraso da outbox e da fila, e alertas na DLQ |
+| Observabilidade | OpenTelemetry com Azure Monitor, com traces do POST até a atualização do saldo e alertas de atraso e de DLQ |
 | Negócio | Estorno de lançamentos e suporte a vários comerciantes |
 | Infraestrutura | Infraestrutura como código com Bicep |
-
-O detalhamento, incluindo melhorias técnicas, está em [docs/arquitetura.md](docs/arquitetura.md#evolução-futura).
 
 ## Documentação detalhada
 
 - [docs/arquitetura.md](docs/arquitetura.md): diagramas de contexto, containers e sequência, topologia do RabbitMQ e evolução futura
+- [docs/arquitetura-azure.md](docs/arquitetura-azure.md): arquitetura alvo na Azure, escalabilidade, alta disponibilidade e recuperação de desastre
 - [docs/requisitos-nao-funcionais.md](docs/requisitos-nao-funcionais.md): SLOs, definição de perda e modos de falha
 - [docs/adr](docs/adr): registros das decisões de arquitetura
