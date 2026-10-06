@@ -6,7 +6,7 @@
 #   bash scripts/carga.sh                                   # pico de 5 min + folga de 2 min
 #   DURACAO_PICO=30s DURACAO_FOLGA=15s bash scripts/carga.sh # versão curta, usada no CI
 #
-# O k6 roda dentro da rede do compose, falando direto com os containers das APIs.
+# O k6 roda dentro da rede do compose e passa pelo nginx, como um cliente real.
 # O resumo é salvo em docs/carga/resultado-k6.md.
 
 set -euo pipefail
@@ -30,8 +30,8 @@ docker run --rm \
   --network "$REDE" \
   -v "$RAIZ/tests/load:/scripts:ro" \
   -v "$RAIZ/docs/carga:/resultados" \
-  -e CONSOLIDADO_URL=http://consolidado-api:8080 \
-  -e LANCAMENTOS_URL=http://lancamentos-api:8080 \
+  -e CONSOLIDADO_URL=http://nginx:5002 \
+  -e LANCAMENTOS_URL=http://nginx:5001 \
   -e API_KEY="$API_KEY" \
   -e DURACAO_PICO="${DURACAO_PICO:-5m}" \
   -e DURACAO_FOLGA="${DURACAO_FOLGA:-2m}" \

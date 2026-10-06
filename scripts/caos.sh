@@ -3,9 +3,10 @@
 #
 # 1. Sobe tudo com docker compose
 # 2. Envia lançamentos sem parar para um dia exclusivo deste teste
-# 3. Derruba a Consolidado.Api (kill) e depois o RabbitMQ (kill)
-# 4. Confirma que nenhum POST falhou durante as quedas
-# 5. Sobe tudo de novo e verifica que o saldo consolidado convergiu para o valor correto
+# 3. Para uma réplica da Lancamentos.Api, como num deploy ou scale-in, e sobe de novo
+# 4. Derruba a Consolidado.Api (kill) e depois o RabbitMQ (kill)
+# 5. Confirma que nenhum POST falhou durante as quedas
+# 6. Sobe tudo de novo e verifica que o saldo consolidado convergiu para o valor correto
 #
 # Uso: bash scripts/caos.sh      (sai com código 0 se passou e 1 se falhou)
 
@@ -27,7 +28,7 @@ log() { echo "[$(date +%H:%M:%S)] $*"; }
 # Se o script for interrompido no meio, para o envio e deixa os serviços de pé.
 finalizar() {
   touch "$TMP/parar"
-  docker compose start rabbitmq consolidado-api >/dev/null 2>&1 || true
+  docker compose start lancamentos-api rabbitmq consolidado-api >/dev/null 2>&1 || true
 }
 trap finalizar EXIT
 
@@ -81,6 +82,15 @@ log "Enviando lançamentos continuamente para o dia $DATA"
 enviar_lancamentos &
 ENVIO_PID=$!
 sleep 10
+
+# O nginx tira a réplica parada do balanceamento e manda os POSTs para a outra.
+REPLICA=$(docker compose ps -q lancamentos-api | head -1)
+log ">>> Parando uma réplica da Lancamentos.Api (a outra continua atendendo)"
+docker stop "$REPLICA" >/dev/null
+sleep 10
+log "<<< Subindo a réplica de novo"
+docker start "$REPLICA" >/dev/null
+sleep 5
 
 log ">>> Derrubando a Consolidado.Api (kill)"
 docker compose kill consolidado-api >/dev/null 2>&1
