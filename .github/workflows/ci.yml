@@ -11,7 +11,7 @@ jobs:
     name: Build e testes (unitários e integração)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-dotnet@v5
         with:
@@ -38,7 +38,7 @@ jobs:
     needs: build-e-testes
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Teste de caos
         run: bash scripts/caos.sh
@@ -52,7 +52,7 @@ jobs:
     needs: build-e-testes
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Sobe a solução
         run: |
