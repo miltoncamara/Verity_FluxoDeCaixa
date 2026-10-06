@@ -3,7 +3,7 @@
     <!-- Banco. EF Core Design na mesma versão do EF usada pelo provider Npgsql. -->
     <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.3" />
     <PackageVersion Include="EFCore.NamingConventions" Version="10.0.1" />
-    <PackageVersion Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.4" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.12" />
 
     <!-- Observabilidade: traces, métricas e logs exportados por OTLP -->
     <PackageVersion Include="OpenTelemetry.Extensions.Hosting" Version="1.19.1" />
