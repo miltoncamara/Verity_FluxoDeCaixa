@@ -92,10 +92,11 @@ Por consequência, o consolidado é **eventualmente consistente**. Em operação
 | Rate limiting | Limite de requisições por segundo para cada cliente, e um limite único para chaves inválidas, contra força bruta. Acima do limite, `429` com `Retry-After` |
 | Endurecimento | Corpo de no máximo 16 KB (`413`), headers de segurança da OWASP, datas só no formato ISO e nenhum detalhe interno nas respostas de erro |
 | Auditoria | Cada lançamento guarda o cliente que o registrou. A `Idempotency-Key` é separada por cliente |
+| Criptografia | As APIs guardam só o hash SHA-256 de cada chave. As conexões com os dois PostgreSQL exigem TLS (TLS 1.3), e uma conexão sem TLS é recusada pelo banco |
 | Segredos | Nenhum segredo real no repositório. Os valores vêm de variáveis de ambiente |
 | CI | Dependabot, CodeQL e verificação de pacotes com vulnerabilidade conhecida |
 
-A criptografia em trânsito e em repouso fica a cargo da plataforma. Na Azure ela vem pelo Front Door, pelo TLS dos serviços gerenciados e pela criptografia padrão dos bancos ([ADR 0009](docs/adr/0009-seguranca.md) e [arquitetura na Azure](docs/arquitetura-azure.md#segurança)).
+O HTTPS na borda, o TLS do broker e a criptografia em repouso ficam a cargo da plataforma. Na Azure eles vêm pelo Front Door, pelo Service Bus e pela criptografia padrão dos serviços gerenciados ([ADR 0009](docs/adr/0009-seguranca.md) e [arquitetura na Azure](docs/arquitetura-azure.md#segurança)).
 
 ## Como rodar
 
@@ -123,7 +124,7 @@ As APIs exigem o header `X-Api-Key`. Localmente existem três clientes de exempl
 | pdv | `local-pdv-key` | Só registrar lançamentos | 20 req/s |
 | bi | `local-bi-key` | Só ler lançamentos e o consolidado | 20 req/s |
 
-Os exemplos abaixo usam o `admin`. Os clientes são configurados em `docker-compose.yml`, e as chaves podem ser trocadas no `.env`.
+Os exemplos abaixo usam o `admin`. Os clientes são configurados em `docker-compose.yml`. As APIs recebem só o hash SHA-256 de cada chave. Para trocar uma chave, gere o hash (`echo -n "nova-chave" | sha256sum`) e coloque no `.env`, como mostra o `.env.example`.
 
 Toda resposta traz o header `X-Upstream-Addr`, que mostra qual réplica atendeu. Para mudar o número de réplicas:
 
@@ -296,12 +297,12 @@ Pré-requisitos: .NET 10 SDK e Docker rodando. Os testes de integração usam Te
 dotnet test --solution FluxoCaixa.slnx
 ```
 
-São 96 testes, executados em cerca de 50 segundos:
+São 97 testes, executados em cerca de 50 segundos:
 
 - **Unitários:** validações da entidade `Lancamento`, cálculo do saldo em `SaldoDiario` e montagem do relatório em `RelatorioDoPeriodo` (dias vazios, saldo negativo, acumulado e limite do período).
 - **Integração da Lancamentos.Api:** o POST grava o lançamento e a outbox juntos, a `Idempotency-Key` não duplica (inclusive com 10 requisições simultâneas), a API aceita lançamentos com o RabbitMQ fora, a publicação é ordenada, persistente e confirmada, duas réplicas publicando ao mesmo tempo não duplicam eventos, requisição mal formada devolve 400, além do health check.
 - **Integração da Consolidado.Api:** o consumidor soma corretamente, ignora evento duplicado, não perde atualizações concorrentes, manda mensagem inválida para a DLQ, limita as reentregas antes da DLQ, usa cache e responde o último valor conhecido com o banco fora. O relatório traz saldo inicial, saldo do dia e acumulado corretos, e um lançamento com data passada corrige o acumulado dos dias seguintes.
-- **Segurança, nos dois serviços:** `401` sem chave, `403` sem permissão, `429` acima do limite do cliente e nas tentativas com chave inválida, `413` para corpo grande, headers de segurança, auditoria do cliente que registrou e `Idempotency-Key` separada por cliente.
+- **Segurança, nos dois serviços:** `401` sem chave, `403` sem permissão, `429` acima do limite do cliente e nas tentativas com chave inválida, `413` para corpo grande, headers de segurança, auditoria do cliente que registrou, `Idempotency-Key` separada por cliente e a API recusando subir com chave em texto no lugar do hash.
 
 ### Carga com k6
 
@@ -369,6 +370,7 @@ Os SLOs, a definição de perda e a tabela completa de modos de falha estão em 
 ```
 infra/
   nginx/                balanceador de carga local
+  postgres/             regras de acesso que exigem TLS
 src/
   Contracts/            record do evento LancamentoRegistrado
   Lancamentos.Api/      Domain, Data (EF Core e outbox), Endpoints, Messaging (publicador), Seguranca

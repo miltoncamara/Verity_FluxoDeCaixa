@@ -47,16 +47,18 @@ Como as regras ficam nas policies, trocar a API Key por JWT do Microsoft Entra I
 
 **Segurança no CI.** Dependabot para pacotes NuGet, imagens Docker e actions. CodeQL para análise estática do C#. Um passo que falha o build se algum pacote tiver vulnerabilidade conhecida.
 
+**Criptografia.**
+
+- **Chaves guardadas como hash.** A configuração tem só o SHA-256 de cada chave (`ChaveSha256`). A API calcula o hash da chave recebida e compara em tempo constante. Quem lê a configuração, um dump do ambiente ou os logs não descobre nenhuma chave. As chaves são longas e aleatórias, então o SHA-256 basta: diferente de uma senha curta, não há como achar a chave a partir do hash por tentativa. A API não sobe se a configuração tiver algo que não seja um hash válido.
+- **TLS nas conexões com os bancos.** Os dois PostgreSQL sobem com `ssl=on` e com um `pg_hba.conf` que recusa conexão pela rede sem TLS. As APIs conectam com `SSL Mode=Require`. As conexões usam TLS 1.3, e o teste de caos confere que todas estão criptografadas.
+
 ## O que fica para a plataforma
 
-A criptografia em trânsito e em repouso não roda localmente.
+- **Validação do certificado do banco.** Localmente o certificado é o de teste da imagem oficial do PostgreSQL. Ele criptografa o tráfego, mas não prova a identidade do servidor, por isso o modo é `Require` e não `VerifyFull`. Na Azure o certificado é o do serviço gerenciado e o cliente usa `VerifyFull`.
+- **HTTPS na borda e AMQPS.** Localmente as chamadas às APIs e ao RabbitMQ seguem em HTTP e AMQP. Um HTTPS com certificado autoassinado obrigaria quem roda o projeto a aceitar avisos de certificado, e o Windows PowerShell 5.1 nem consegue ignorá-los. Na Azure o HTTPS fica no Front Door e o Service Bus só aceita TLS.
+- **Criptografia em repouso.** Os dados não têm informação pessoal, mas são financeiros. Na Azure a criptografia em repouso já vem habilitada nos bancos, no Service Bus e nos discos, com chave própria no Key Vault se a empresa exigir.
 
-- **Em trânsito:** HTTPS na borda, TLS no PostgreSQL e no Service Bus.
-- **Em repouso:** criptografia dos discos e dos bancos.
-
-Na Azure, a maior parte disso já vem habilitada nos serviços gerenciados. A configuração está na [arquitetura alvo](../arquitetura-azure.md#segurança).
-
-Localmente, um HTTPS com certificado autoassinado obrigaria o avaliador a aceitar avisos de certificado ou usar `curl -k`, sem demonstrar nada que a plataforma não faça melhor.
+A configuração está na [arquitetura alvo](../arquitetura-azure.md#segurança).
 
 ## Consequências
 
@@ -66,7 +68,9 @@ Localmente, um HTTPS com certificado autoassinado obrigaria o avaliador a aceita
 - Uma chave pode ser revogada sem afetar os outros clientes.
 - Abuso de um cliente e força bruta em chaves são contidos.
 - Todo lançamento tem autor registrado.
-- Os testes cobrem `401`, `403`, `429`, `413`, os headers e a auditoria.
+- Uma chave vazada da configuração não existe: só o hash fica guardado.
+- Os dados financeiros trafegam criptografados entre as APIs e os bancos, e uma conexão sem TLS é recusada.
+- Os testes cobrem `401`, `403`, `429`, `413`, os headers, a auditoria e a recusa de configuração com chave em texto.
 
 **Negativas**
 
