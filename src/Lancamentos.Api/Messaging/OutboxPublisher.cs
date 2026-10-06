@@ -1,12 +1,14 @@
 using System.Text;
 using Lancamentos.Api.Data;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 using RabbitMQ.Client;
 
 namespace Lancamentos.Api.Messaging;
 
 /// <summary>
 /// Lê a outbox em loop e publica os eventos pendentes no RabbitMQ, em ordem.
+/// Com várias réplicas, um advisory lock do PostgreSQL garante que só uma publica por vez.
 /// Se o RabbitMQ estiver fora, apenas loga e tenta de novo no próximo ciclo.
 /// A API continua aceitando lançamentos normalmente, porque eles só dependem do banco.
 /// </summary>
@@ -18,6 +20,9 @@ public sealed class OutboxPublisher(
     // Os mesmos nomes são declarados pelo consumidor na Consolidado.Api.
     public const string Exchange = "lancamentos";
     public const string RoutingKey = "lancamento.registrado";
+
+    // Identificador do advisory lock do PostgreSQL que elege qual réplica publica (qualquer número fixo serve).
+    private const long ChaveDoLock = 7_001;
 
     private const int TamanhoDoLote = 100;
     private static readonly TimeSpan IntervaloEntreCiclos = TimeSpan.FromMilliseconds(500);
@@ -61,6 +66,18 @@ public sealed class OutboxPublisher(
 
     private async Task PublicarPendentesAsync(CancellationToken ct)
     {
+        // Com várias réplicas da API, cada uma roda o seu publicador. Só a que conseguir o lock publica
+        // neste ciclo. As outras ficam de reserva e assumem se a ativa cair. Isso evita publicar o mesmo
+        // evento duas vezes e mantém a ordem de publicação.
+        // O lock fica preso a uma transação numa conexão própria, então é liberado sozinho no fim do
+        // método ou se o processo morrer. As marcações de publicado continuam sendo gravadas uma a uma.
+        await using var conexaoDoLock = new NpgsqlConnection(configuration.GetConnectionString("Lancamentos"));
+        await conexaoDoLock.OpenAsync(ct);
+        await using var transacaoDoLock = await conexaoDoLock.BeginTransactionAsync(ct);
+        await using var tentarLock = new NpgsqlCommand($"SELECT pg_try_advisory_xact_lock({ChaveDoLock})", conexaoDoLock, transacaoDoLock);
+        if (await tentarLock.ExecuteScalarAsync(ct) is not true)
+            return;
+
         await using var scope = scopeFactory.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<LancamentosDbContext>();
 
