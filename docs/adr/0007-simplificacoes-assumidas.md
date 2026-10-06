@@ -12,7 +12,8 @@ O objetivo é uma solução que atenda todos os requisitos, que possa ser execut
 | Simplificação | Motivo | Evolução |
 |---|---|---|
 | **Um único comerciante** | Não há requisito de vários comerciantes | Id do comerciante no lançamento, no evento e na chave do saldo, vindo do token |
-| **API Key compartilhada** no header `X-Api-Key` | Protege as APIs sem exigir um provedor de identidade para rodar localmente | JWT do Microsoft Entra ID, com escopos de leitura e escrita |
+| **API Key por cliente** no header `X-Api-Key` | Autentica e autoriza por permissões sem exigir um provedor de identidade para rodar localmente ([ADR 0009](0009-seguranca.md)) | JWT do Microsoft Entra ID, com as mesmas policies |
+| **Sem criptografia local** em trânsito e em repouso | HTTPS autoassinado só traria avisos de certificado para quem roda o projeto | TLS em tudo e criptografia em repouso dos serviços gerenciados na Azure |
 | **Valores padrão `local-dev`** para senhas e API Key no docker compose | O avaliador sobe tudo com um comando, sem criar arquivo `.env`. Os valores só servem para containers descartáveis | Segredos no Azure Key Vault, lidos por managed identity |
 | **Publicador e consumidor como `BackgroundService`** dentro das APIs | Menos processos para subir e explicar | Deployments separados no AKS, escalando cada um pela sua carga |
 | **Migrations aplicadas na inicialização** | O banco fica pronto sem passo manual | Etapa separada no pipeline de deploy |

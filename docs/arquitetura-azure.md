@@ -126,11 +126,21 @@ Metas sugeridas, para validar com o negócio:
 
 ## Segurança
 
-- **Borda:** Front Door com WAF e TLS 1.2 ou superior.
-- **Identidade:** tokens JWT do Entra ID, validados pelas APIs.
-- **Rede:** comunicação interna por **private endpoints**. Banco, Service Bus, Redis e Key Vault ficam sem acesso público.
-- **Segredos:** os pods usam **workload identity** para acessar o Key Vault, o Service Bus e o PostgreSQL. Não existe senha guardada.
-- **Proteção:** Microsoft Defender for Cloud e criptografia em repouso, que já vem habilitada nos serviços gerenciados.
+O que já roda localmente está no [ADR 0009](adr/0009-seguranca.md). A tabela mostra como cada proteção fica na Azure.
+
+| Proteção | Localmente | Na Azure |
+|---|---|---|
+| **Autenticação** | API Key por cliente no header `X-Api-Key` | JWT emitido pelo **Microsoft Entra ID**, com expiração e revogação. Os sistemas clientes usam client credentials ou managed identity. Só o esquema de autenticação muda: as policies continuam as mesmas |
+| **Autorização** | Permissões por cliente, exigidas por policies em cada endpoint (`403`) | As mesmas policies, lendo os escopos e roles do token (`lancamentos.escrita`, `consolidado.leitura`) |
+| **Criptografia em trânsito** | Não há. Tudo roda em HTTP dentro da máquina | HTTPS com TLS 1.2 ou superior no Front Door e no ingress, com HSTS. PostgreSQL com `SslMode=VerifyFull`. O Service Bus só aceita TLS |
+| **Criptografia em repouso** | Não há | Habilitada por padrão no PostgreSQL Flexible Server, no Service Bus, no Redis e nos discos do AKS. Se a empresa exigir, com chave própria (customer-managed key) guardada no Key Vault |
+| **Rate limiting** | Por cliente e por réplica, nas APIs (`429`) | Também na borda, com regras de rate limit do WAF do Front Door, que valem para todas as réplicas juntas. O API Management é uma alternativa, com cotas por assinatura |
+| **Proteção contra ataques web** | Validação de entrada, limite de corpo, headers OWASP | WAF do Front Door com as regras gerenciadas da OWASP e proteção contra bots. Proteção DDoS da própria Azure |
+| **Rede** | Só o nginx publica portas | **Private endpoints**: banco, Service Bus, Redis e Key Vault ficam sem acesso público. Network policies no AKS limitam quem fala com quem |
+| **Segredos** | Variáveis de ambiente com padrão `local-dev` | **Key Vault** com **workload identity**. Os pods acessam o PostgreSQL e o Service Bus pela identidade, sem senha |
+| **Auditoria** | Coluna `criado_por` em cada lançamento | A mesma coluna, mais os logs de acesso do Front Door e do Entra ID no Azure Monitor |
+| **Dependências e código** | Dependabot, CodeQL e verificação de pacotes vulneráveis no CI | O mesmo, mais o **Microsoft Defender for Containers** analisando as imagens no Azure Container Registry e o cluster em execução |
+| **Postura** | Não se aplica | **Microsoft Defender for Cloud** com as recomendações do Azure Security Benchmark |
 
 ## Observabilidade
 

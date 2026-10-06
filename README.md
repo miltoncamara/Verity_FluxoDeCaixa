@@ -13,6 +13,7 @@ Stack: .NET 10, ASP.NET Core Minimal APIs, PostgreSQL com EF Core, RabbitMQ (Rab
 
 - [Arquitetura](#arquitetura)
 - [Invariante central](#invariante-central)
+- [Segurança](#segurança)
 - [Como rodar](#como-rodar)
 - [Exemplos de chamadas](#exemplos-de-chamadas)
 - [Como rodar os testes](#como-rodar-os-testes)
@@ -79,6 +80,20 @@ Na prática isso significa:
 
 Por consequência, o consolidado é **eventualmente consistente**. Em operação normal, o saldo reflete um lançamento em poucos segundos. Com alguma parte fora do ar, ele converge assim que tudo volta.
 
+## Segurança
+
+| Proteção | Como funciona |
+|---|---|
+| Autenticação | Cada sistema cliente tem a própria API Key, enviada no header `X-Api-Key` e comparada em tempo constante |
+| Autorização | Cada cliente tem permissões (`lancamentos.escrita`, `lancamentos.leitura`, `consolidado.leitura`) e cada endpoint exige a sua. Sem chave, `401`. Sem permissão, `403`. Todo endpoint novo nasce protegido |
+| Rate limiting | Limite de requisições por segundo para cada cliente, e um limite único para chaves inválidas, contra força bruta. Acima do limite, `429` com `Retry-After` |
+| Endurecimento | Corpo de no máximo 16 KB (`413`), headers de segurança da OWASP, datas só no formato ISO e nenhum detalhe interno nas respostas de erro |
+| Auditoria | Cada lançamento guarda o cliente que o registrou. A `Idempotency-Key` é separada por cliente |
+| Segredos | Nenhum segredo real no repositório. Os valores vêm de variáveis de ambiente |
+| CI | Dependabot, CodeQL e verificação de pacotes com vulnerabilidade conhecida |
+
+A criptografia em trânsito e em repouso fica a cargo da plataforma. Na Azure ela vem pelo Front Door, pelo TLS dos serviços gerenciados e pela criptografia padrão dos bancos ([ADR 0009](docs/adr/0009-seguranca.md) e [arquitetura na Azure](docs/arquitetura-azure.md#segurança)).
+
 ## Como rodar
 
 Pré-requisito: Docker com Docker Compose.
@@ -97,7 +112,15 @@ Esse comando sobe os dois bancos, o RabbitMQ, 2 réplicas de cada API e o nginx 
 | PostgreSQL de lançamentos | localhost:15432 |
 | PostgreSQL do consolidado | localhost:15433 |
 
-As APIs exigem o header `X-Api-Key`. Localmente a chave é `local-dev-key`.
+As APIs exigem o header `X-Api-Key`. Localmente existem três clientes de exemplo:
+
+| Cliente | Chave | Permissões | Limite por réplica |
+|---|---|---|---|
+| admin | `local-dev-key` | Todas | 20.000 req/s |
+| pdv | `local-pdv-key` | Só registrar lançamentos | 20 req/s |
+| bi | `local-bi-key` | Só ler lançamentos e o consolidado | 20 req/s |
+
+Os exemplos abaixo usam o `admin`. Os clientes são configurados em `docker-compose.yml`, e as chaves podem ser trocadas no `.env`.
 
 Toda resposta traz o header `X-Upstream-Addr`, que mostra qual réplica atendeu. Para mudar o número de réplicas:
 
@@ -105,7 +128,7 @@ Toda resposta traz o header `X-Upstream-Addr`, que mostra qual réplica atendeu.
 docker compose up -d --scale lancamentos-api=3 --scale consolidado-api=3
 ```
 
-As senhas e a API Key têm valores padrão `local-dev` só para os containers descartáveis desta máquina. Para trocar, copie `.env.example` para `.env` e altere os valores. Nenhum segredo real fica no repositório. Em produção esses valores viriam de um cofre como o Azure Key Vault.
+As senhas e as chaves têm valores padrão `local-dev` só para os containers descartáveis desta máquina. Para trocar, copie `.env.example` para `.env` e altere os valores. Nenhum segredo real fica no repositório. Em produção esses valores viriam de um cofre como o Azure Key Vault.
 
 Para parar e apagar os dados:
 
@@ -212,6 +235,24 @@ curl -X POST http://localhost:5001/lancamentos \
 {"title":"One or more validation errors occurred.","status":400,"errors":{"tipo":["Tipo deve ser 'Credito' ou 'Debito'."],"valor":["Valor deve ser maior que zero."],"descricao":["Descrição é obrigatória."]}}
 ```
 
+Permissões e limites. O cliente `pdv` registra lançamentos, mas recebe `403` ao tentar ler o consolidado:
+
+```bash
+curl -i -H "X-Api-Key: local-pdv-key" http://localhost:5002/consolidado/2026-10-05
+```
+
+O cliente `bi` lê, mas não registra:
+
+```bash
+curl -i -X POST http://localhost:5001/lancamentos -H "X-Api-Key: local-bi-key" -H "Content-Type: application/json" -d '{"data":"2026-10-05","tipo":"Credito","valor":10,"descricao":"Teste"}'
+```
+
+Acima de 20 requisições por segundo, o `bi` passa a receber `429`:
+
+```bash
+for i in $(seq 1 60); do curl -s -o /dev/null -w "%{http_code} " -H "X-Api-Key: local-bi-key" http://localhost:5002/consolidado/2026-10-05 & done; wait; echo
+```
+
 Health check de cada serviço, sem API Key. Cada um verifica apenas o próprio banco.
 
 ```bash
@@ -252,11 +293,12 @@ Pré-requisitos: .NET 10 SDK e Docker rodando. Os testes de integração usam Te
 dotnet test --solution FluxoCaixa.slnx
 ```
 
-São 79 testes, executados em cerca de 45 segundos:
+São 96 testes, executados em cerca de 50 segundos:
 
 - **Unitários:** validações da entidade `Lancamento`, cálculo do saldo em `SaldoDiario` e montagem do relatório em `RelatorioDoPeriodo` (dias vazios, saldo negativo, acumulado e limite do período).
-- **Integração da Lancamentos.Api:** o POST grava o lançamento e a outbox juntos, a `Idempotency-Key` não duplica (inclusive com 10 requisições simultâneas), a API aceita lançamentos com o RabbitMQ fora, a publicação é ordenada, persistente e confirmada, duas réplicas publicando ao mesmo tempo não duplicam eventos, requisição mal formada devolve 400, além de API Key e health check.
+- **Integração da Lancamentos.Api:** o POST grava o lançamento e a outbox juntos, a `Idempotency-Key` não duplica (inclusive com 10 requisições simultâneas), a API aceita lançamentos com o RabbitMQ fora, a publicação é ordenada, persistente e confirmada, duas réplicas publicando ao mesmo tempo não duplicam eventos, requisição mal formada devolve 400, além do health check.
 - **Integração da Consolidado.Api:** o consumidor soma corretamente, ignora evento duplicado, não perde atualizações concorrentes, manda mensagem inválida para a DLQ, limita as reentregas antes da DLQ, usa cache e responde o último valor conhecido com o banco fora. O relatório traz saldo inicial, saldo do dia e acumulado corretos, e um lançamento com data passada corrige o acumulado dos dias seguintes.
+- **Segurança, nos dois serviços:** `401` sem chave, `403` sem permissão, `429` acima do limite do cliente e nas tentativas com chave inválida, `413` para corpo grande, headers de segurança, auditoria do cliente que registrou e `Idempotency-Key` separada por cliente.
 
 ### Carga com k6
 
@@ -314,7 +356,7 @@ O workflow [ci.yml](.github/workflows/ci.yml) roda build e testes a cada push. D
 | Uma mensagem com problema não trava a fila | DLQ para mensagem inválida. Reentrega limitada pela quorum queue para erros inesperados | `Mensagem_invalida_vai_direto_para_a_dead_letter_queue` e `Erro_inesperado_devolve_para_a_fila_ate_o_limite...` |
 | A consulta continua respondendo com o banco do consolidado fora | Último valor conhecido em memória, com `X-Stale-Data` e `Age` | `Com_o_banco_fora_responde_o_ultimo_valor_conhecido_marcado_como_desatualizado` |
 | Repetir um POST não duplica o lançamento | `Idempotency-Key` com índice único no banco | `Post_repetido_com_mesma_idempotency_key_nao_duplica` e `Posts_simultaneos_com_mesma_idempotency_key...` |
-| Acesso restrito | API Key no header `X-Api-Key`, vinda de variável de ambiente | `ApiKeyTests` nos dois serviços |
+| Segurança: proteger dados e sistemas contra ameaças | Autenticação por cliente, autorização por permissões, rate limiting, limite de corpo, headers OWASP, auditoria e verificação de dependências no CI ([ADR 0009](docs/adr/0009-seguranca.md)). Criptografia pela plataforma na Azure | `ApiKeyTests` e `SegurancaTests` nos dois serviços |
 | Escalabilidade: aguentar mais carga sem degradar | Réplicas sem estado atrás de um balanceador. Publicador único por advisory lock. Consumidores concorrentes. Cache com afinidade por data ([ADR 0008](docs/adr/0008-escalabilidade-horizontal.md)) | `Duas_replicas_publicando_ao_mesmo_tempo...`, o caos com uma réplica parada (0 falhas) e o teste de capacidade: até 10.000 req/s com 0% de perda e p95 abaixo de 25 ms, com 1 e com 2 réplicas ([resultados](docs/carga)) |
 
 Os SLOs, a definição de perda e a tabela completa de modos de falha estão em [docs/requisitos-nao-funcionais.md](docs/requisitos-nao-funcionais.md).
@@ -350,7 +392,7 @@ Cada API é um único projeto, organizado em pastas. A separação em camadas fi
 - **Um único comerciante.** Não há separação de dados por comerciante.
 - **Lançamentos imutáveis.** Não há update nem delete. A correção será feita por estorno ([ADR 0006](docs/adr/0006-lancamentos-imutaveis.md)).
 - **Data do lançamento.** É a data de negócio informada pelo cliente, sem fuso horário. O `CriadoEm` é gravado em UTC.
-- **Autenticação simples.** Uma API Key compartilhada protege as duas APIs.
+- **Autenticação por API Key.** Cada cliente tem a sua chave e as suas permissões. Em produção, o JWT do Entra ID substitui a chave sem mudar as regras de autorização.
 - **Migrations na inicialização.** Cada API aplica as próprias migrations ao subir. Em produção isso seria uma etapa do pipeline de deploy.
 - **Consumidor e API no mesmo processo.** O consumidor roda dentro da Consolidado.Api para simplificar a entrega.
 
