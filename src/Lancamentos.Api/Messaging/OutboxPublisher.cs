@@ -1,5 +1,7 @@
 using System.Text;
+using System.Diagnostics;
 using Lancamentos.Api.Data;
+using Lancamentos.Api.Observabilidade;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using RabbitMQ.Client;
@@ -51,6 +53,7 @@ public sealed class OutboxPublisher(
             catch (Exception ex)
             {
                 // RabbitMQ ou banco indisponível. Os eventos continuam pendentes na outbox.
+                Telemetria.FalhasDePublicacao.Add(1);
                 logger.LogWarning("Falha ao publicar a outbox, nova tentativa em {Segundos}s: {Erro}",
                     IntervaloAposFalha.TotalSeconds, ex.Message);
                 await FecharConexaoAsync();
@@ -66,9 +69,14 @@ public sealed class OutboxPublisher(
 
     private async Task PublicarPendentesAsync(CancellationToken ct)
     {
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<LancamentosDbContext>();
+
+        await AtualizarMetricasDaOutboxAsync(db, ct);
+
         // Com várias réplicas da API, cada uma roda o seu publicador. Só a que conseguir o lock publica
         // neste ciclo. As outras ficam de reserva e assumem se a ativa cair. Isso evita publicar o mesmo
-        // evento duas vezes e mantém a ordem de publicação.
+        // evento duas vezes.
         // O lock fica preso a uma transação numa conexão própria, então é liberado sozinho no fim do
         // método ou se o processo morrer. As marcações de publicado continuam sendo gravadas uma a uma.
         await using var conexaoDoLock = new NpgsqlConnection(configuration.GetConnectionString("Lancamentos"));
@@ -77,9 +85,6 @@ public sealed class OutboxPublisher(
         await using var tentarLock = new NpgsqlCommand($"SELECT pg_try_advisory_xact_lock({ChaveDoLock})", conexaoDoLock, transacaoDoLock);
         if (await tentarLock.ExecuteScalarAsync(ct) is not true)
             return;
-
-        await using var scope = scopeFactory.CreateAsyncScope();
-        var db = scope.ServiceProvider.GetRequiredService<LancamentosDbContext>();
 
         var pendentes = await db.Outbox
             .Where(o => o.PublicadoEm == null)
@@ -94,12 +99,21 @@ public sealed class OutboxPublisher(
 
         foreach (var mensagem in pendentes)
         {
+            // Continua o trace da requisição que gerou o evento, mesmo que ela tenha acontecido há tempo.
+            using var atividade = Telemetria.Traces.StartActivity(
+                $"publicar {mensagem.Tipo}", ActivityKind.Producer, mensagem.TraceParent);
+            atividade?.SetTag("messaging.system", "rabbitmq");
+            atividade?.SetTag("messaging.destination.name", Exchange);
+            atividade?.SetTag("messaging.message.id", mensagem.Id.ToString());
+
             var propriedades = new BasicProperties
             {
                 MessageId = mensagem.Id.ToString(),
                 Type = mensagem.Tipo,
                 ContentType = "application/json",
-                Persistent = true // a mensagem sobrevive a um restart do RabbitMQ
+                Persistent = true, // a mensagem sobrevive a um restart do RabbitMQ
+                // Leva o contexto do trace até o consumidor, no header padrão W3C.
+                Headers = new Dictionary<string, object?> { [Telemetria.HeaderTraceParent] = atividade?.Id ?? mensagem.TraceParent }
             };
 
             // Com publisher confirms, este await só termina quando o broker confirma que guardou a mensagem.
@@ -112,9 +126,19 @@ public sealed class OutboxPublisher(
             // Isso é aceitável porque o consumidor é idempotente (entrega at-least-once).
             mensagem.PublicadoEm = DateTimeOffset.UtcNow;
             await db.SaveChangesAsync(ct);
+            Telemetria.EventosPublicados.Add(1);
         }
 
         logger.LogInformation("{Quantidade} evento(s) publicado(s) da outbox", pendentes.Count);
+    }
+
+    private static async Task AtualizarMetricasDaOutboxAsync(LancamentosDbContext db, CancellationToken ct)
+    {
+        var pendentes = db.Outbox.Where(o => o.PublicadoEm == null);
+        var quantidade = await pendentes.LongCountAsync(ct);
+        var maisAntigo = await pendentes.OrderBy(o => o.CriadoEm).Select(o => (DateTimeOffset?)o.CriadoEm).FirstOrDefaultAsync(ct);
+        var idade = maisAntigo is null ? 0 : (DateTimeOffset.UtcNow - maisAntigo.Value).TotalSeconds;
+        Telemetria.AtualizarOutbox(quantidade, idade);
     }
 
     private async Task LimparPublicadosAntigosAsync(CancellationToken ct)

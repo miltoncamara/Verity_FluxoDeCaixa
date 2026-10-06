@@ -31,6 +31,7 @@ public sealed class LancamentosDbContext(DbContextOptions<LancamentosDbContext> 
             e.HasKey(o => o.Id);
             e.Property(o => o.Tipo).HasMaxLength(100);
             e.Property(o => o.Payload).HasColumnType("jsonb");
+            e.Property(o => o.TraceParent).HasMaxLength(100);
             // Índice parcial: o publicador só procura eventos ainda não publicados.
             e.HasIndex(o => o.CriadoEm).HasFilter("publicado_em IS NULL");
         });

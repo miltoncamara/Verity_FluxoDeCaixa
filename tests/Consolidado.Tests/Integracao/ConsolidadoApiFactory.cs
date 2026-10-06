@@ -62,9 +62,11 @@ public sealed class ConsolidadoApiFactory : WebApplicationFactory<Program>, IAsy
     public Task PublicarAsync(LancamentoRegistrado evento) =>
         PublicarAsync(JsonSerializer.Serialize(evento, JsonSerializerOptions.Web), evento.EventoId.ToString());
 
-    public async Task PublicarAsync(string corpo, string messageId)
+    public async Task PublicarAsync(string corpo, string messageId, string? traceparent = null)
     {
         var propriedades = new BasicProperties { MessageId = messageId, Persistent = true };
+        if (traceparent is not null)
+            propriedades.Headers = new Dictionary<string, object?> { ["traceparent"] = traceparent };
         await _canalDoTeste!.BasicPublishAsync(LancamentoRegistradoConsumer.Exchange, LancamentoRegistradoConsumer.RoutingKey,
             mandatory: false, propriedades, Encoding.UTF8.GetBytes(corpo));
     }

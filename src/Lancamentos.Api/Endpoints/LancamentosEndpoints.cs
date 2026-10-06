@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Security.Claims;
 using Lancamentos.Api.Data;
 using Lancamentos.Api.Domain;
+using Lancamentos.Api.Observabilidade;
 using Lancamentos.Api.Seguranca;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -23,6 +24,7 @@ public static class LancamentosEndpoints
         [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
         ClaimsPrincipal usuario,
         LancamentosDbContext db,
+        ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
         // O cliente vem da API Key autenticada, nunca do corpo da requisição.
@@ -57,6 +59,10 @@ public static class LancamentosEndpoints
             var original = await BuscarPorIdempotencyKey(db, cliente, idempotencyKey, ct);
             return Results.Ok(LancamentoResponse.De(original!));
         }
+
+        Telemetria.LancamentosRegistrados.Add(1, new KeyValuePair<string, object?>("tipo", lancamento.Tipo.ToString()));
+        loggerFactory.CreateLogger(nameof(LancamentosEndpoints)).LogInformation(
+            "Lançamento {LancamentoId} de {Data} registrado pelo cliente {Cliente}", lancamento.Id, lancamento.Data, cliente);
 
         return Results.Created($"/lancamentos/{lancamento.Id}", LancamentoResponse.De(lancamento));
     }

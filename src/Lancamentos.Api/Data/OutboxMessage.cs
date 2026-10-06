@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using Contracts;
 using Lancamentos.Api.Domain;
@@ -16,6 +17,13 @@ public sealed class OutboxMessage
     public DateTimeOffset CriadoEm { get; private init; }
     public DateTimeOffset? PublicadoEm { get; set; }
 
+    /// <summary>
+    /// Contexto do trace da requisição que gerou o evento, no formato W3C (traceparent).
+    /// O publicador continua esse trace e o leva até o consumidor dentro da mensagem, então um
+    /// único trace mostra o POST, a publicação e a atualização do saldo, mesmo sendo assíncrono.
+    /// </summary>
+    public string? TraceParent { get; private init; }
+
     private OutboxMessage() { }
 
     public static OutboxMessage LancamentoRegistrado(Lancamento lancamento)
@@ -33,7 +41,8 @@ public sealed class OutboxMessage
             Id = evento.EventoId,
             Tipo = nameof(Contracts.LancamentoRegistrado),
             Payload = JsonSerializer.Serialize(evento, JsonSerializerOptions.Web),
-            CriadoEm = lancamento.CriadoEm
+            CriadoEm = lancamento.CriadoEm,
+            TraceParent = Activity.Current?.Id
         };
     }
 }

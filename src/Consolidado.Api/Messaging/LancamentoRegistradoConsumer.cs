@@ -1,6 +1,9 @@
+using System.Diagnostics;
+using System.Text;
 using System.Text.Json;
 using Consolidado.Api.Data;
 using Consolidado.Api.Domain;
+using Consolidado.Api.Observabilidade;
 using Contracts;
 using Microsoft.EntityFrameworkCore.Storage;
 using Npgsql;
@@ -110,12 +113,21 @@ public sealed class LancamentoRegistradoConsumer(
 
     private async Task ProcessarMensagemAsync(IChannel channel, BasicDeliverEventArgs mensagem, CancellationToken ct)
     {
+        // Continua o trace que veio dentro da mensagem: o mesmo do POST que registrou o lançamento.
+        using var atividade = Telemetria.Traces.StartActivity(
+            "processar LancamentoRegistrado", ActivityKind.Consumer, LerTraceParent(mensagem));
+        atividade?.SetTag("messaging.system", "rabbitmq");
+        atividade?.SetTag("messaging.destination.name", Fila);
+        atividade?.SetTag("messaging.message.id", mensagem.BasicProperties.MessageId);
+
         try
         {
             var evento = LerEvento(mensagem);
             if (evento is null)
             {
                 // Mensagem que nunca vai ser processada com sucesso: vai direto para a dead letter queue.
+                Telemetria.MensagensRejeitadas.Add(1, new KeyValuePair<string, object?>("motivo", "invalida"));
+                atividade?.SetStatus(ActivityStatusCode.Error, "Mensagem inválida, enviada para a DLQ");
                 await channel.BasicRejectAsync(mensagem.DeliveryTag, requeue: false, ct);
                 return;
             }
@@ -132,14 +144,24 @@ public sealed class LancamentoRegistradoConsumer(
                     // e a tabela eventos_processados impede que ela seja somada duas vezes.
                     await channel.BasicAckAsync(mensagem.DeliveryTag, multiple: false, ct);
 
-                    if (!aplicado)
+                    if (aplicado)
+                    {
+                        Telemetria.EventosAplicados.Add(1);
+                        Telemetria.AtrasoDoEvento.Record((DateTimeOffset.UtcNow - evento.OcorridoEm).TotalSeconds);
+                        logger.LogInformation("Evento {EventoId} aplicado ao saldo de {Data}", evento.EventoId, evento.Data);
+                    }
+                    else
+                    {
+                        Telemetria.EventosDuplicados.Add(1);
                         logger.LogInformation("Evento {EventoId} já processado, ignorado", evento.EventoId);
+                    }
                     return;
                 }
                 catch (Exception ex) when (EhFalhaTransitoria(ex) && !ct.IsCancellationRequested && channel.IsOpen)
                 {
                     // Banco fora do ar não é culpa da mensagem. Ela fica com o consumidor, sem ack,
                     // e é processada de novo quando o banco voltar. Não conta para o limite de entregas.
+                    Telemetria.FalhasTransitorias.Add(1);
                     logger.LogWarning("Banco do consolidado indisponível, nova tentativa em {Segundos}s: {Erro}",
                         IntervaloAposFalha.TotalSeconds, ex.Message);
                     await Task.Delay(IntervaloAposFalha, ct);
@@ -155,11 +177,20 @@ public sealed class LancamentoRegistradoConsumer(
             // Erro inesperado: devolve para a fila. Depois de LimiteDeEntregas tentativas, vai para a DLQ.
             // Usa basic.reject e não basic.nack: desde o RabbitMQ 4.3 a quorum queue só conta para o
             // x-delivery-limit as devoluções feitas com reject. Com nack a mensagem voltaria para sempre.
+            Telemetria.MensagensRejeitadas.Add(1, new KeyValuePair<string, object?>("motivo", "erro_inesperado"));
+            atividade?.SetStatus(ActivityStatusCode.Error, ex.Message);
+            atividade?.AddException(ex);
             logger.LogError(ex, "Erro ao processar a mensagem {MessageId}, devolvendo para a fila", mensagem.BasicProperties.MessageId);
             if (channel.IsOpen)
                 await channel.BasicRejectAsync(mensagem.DeliveryTag, requeue: true, CancellationToken.None);
         }
     }
+
+    // O RabbitMQ entrega os headers de texto como bytes.
+    private static string? LerTraceParent(BasicDeliverEventArgs mensagem) =>
+        mensagem.BasicProperties.Headers?.TryGetValue(Telemetria.HeaderTraceParent, out var valor) == true && valor is byte[] bytes
+            ? Encoding.UTF8.GetString(bytes)
+            : null;
 
     private LancamentoRegistrado? LerEvento(BasicDeliverEventArgs mensagem)
     {

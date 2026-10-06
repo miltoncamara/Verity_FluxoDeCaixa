@@ -1,6 +1,7 @@
 using Consolidado.Api.Data;
 using Consolidado.Api.Endpoints;
 using Consolidado.Api.Messaging;
+using Consolidado.Api.Observabilidade;
 using Consolidado.Api.Seguranca;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
@@ -10,6 +11,7 @@ var builder = WebApplication.CreateBuilder(args);
 
 var connectionString = builder.Configuration.GetConnectionString("Consolidado");
 
+builder.AddObservabilidade();
 builder.AddSeguranca();
 builder.Services.AddProblemDetails();
 builder.Services.AddMemoryCache();

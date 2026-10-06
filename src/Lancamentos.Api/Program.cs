@@ -1,6 +1,7 @@
 using Lancamentos.Api.Data;
 using Lancamentos.Api.Endpoints;
 using Lancamentos.Api.Messaging;
+using Lancamentos.Api.Observabilidade;
 using Lancamentos.Api.Seguranca;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
@@ -10,6 +11,7 @@ var builder = WebApplication.CreateBuilder(args);
 
 var connectionString = builder.Configuration.GetConnectionString("Lancamentos");
 
+builder.AddObservabilidade();
 builder.AddSeguranca();
 builder.Services.AddProblemDetails();
 builder.Services.AddDbContext<LancamentosDbContext>(options => options

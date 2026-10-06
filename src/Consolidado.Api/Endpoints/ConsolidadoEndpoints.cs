@@ -1,6 +1,7 @@
 using System.Globalization;
 using Consolidado.Api.Data;
 using Consolidado.Api.Domain;
+using Consolidado.Api.Observabilidade;
 using Consolidado.Api.Seguranca;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -80,6 +81,9 @@ public static class ConsolidadoEndpoints
         }, cache, response, loggerFactory, ct);
     }
 
+    private static void RegistrarLeitura(string origem) =>
+        Telemetria.Leituras.Add(1, new KeyValuePair<string, object?>("origem", origem));
+
     // Aceita somente yyyy-MM-dd. Sem isso o ASP.NET aceitaria "07-10-2026" e leria como 10 de julho.
     private static bool TentarLerData(string? texto, out DateOnly data) =>
         DateOnly.TryParseExact(texto, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out data);
@@ -102,7 +106,10 @@ public static class ConsolidadoEndpoints
         cache.TryGetValue(chave, out LeituraEmCache<T>? emCache);
 
         if (emCache is not null && DateTimeOffset.UtcNow - emCache.LidoEm < TempoDeCache)
+        {
+            RegistrarLeitura("cache");
             return Results.Ok(emCache.Valor);
+        }
 
         try
         {
@@ -112,6 +119,7 @@ public static class ConsolidadoEndpoints
             var valor = await lerDoBanco(limite.Token);
 
             cache.Set(chave, new LeituraEmCache<T>(valor, DateTimeOffset.UtcNow), TempoDoUltimoValorConhecido);
+            RegistrarLeitura("banco");
             return Results.Ok(valor);
         }
         catch (Exception ex) when (!ct.IsCancellationRequested)
@@ -121,12 +129,14 @@ public static class ConsolidadoEndpoints
 
             if (emCache is null)
             {
+                RegistrarLeitura("indisponivel");
                 response.Headers.RetryAfter = "5";
                 return Results.Problem(statusCode: StatusCodes.Status503ServiceUnavailable,
                     title: "Consolidado temporariamente indisponível.");
             }
 
             // Banco fora, mas existe um valor conhecido: responde com ele e avisa que pode estar desatualizado.
+            RegistrarLeitura("ultimo_valor_conhecido");
             response.Headers[HeaderDadoDesatualizado] = "true";
             response.Headers.Age = ((int)(DateTimeOffset.UtcNow - emCache.LidoEm).TotalSeconds).ToString();
             return Results.Ok(emCache.Valor);

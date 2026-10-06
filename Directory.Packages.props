@@ -5,6 +5,13 @@
     <PackageVersion Include="EFCore.NamingConventions" Version="10.0.1" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.4" />
 
+    <!-- Observabilidade: traces, métricas e logs exportados por OTLP -->
+    <PackageVersion Include="OpenTelemetry.Extensions.Hosting" Version="1.19.1" />
+    <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.19.1" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.19.0" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.Runtime" Version="1.19.0" />
+    <PackageVersion Include="Npgsql.OpenTelemetry" Version="10.0.3" />
+
     <!-- Mensageria -->
     <PackageVersion Include="RabbitMQ.Client" Version="7.2.2" />
 

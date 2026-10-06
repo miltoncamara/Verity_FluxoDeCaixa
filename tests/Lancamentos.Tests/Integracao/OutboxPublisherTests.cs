@@ -52,6 +52,25 @@ public class OutboxPublisherTests(LancamentosComRabbitMqFactory factory) : IAsyn
     }
 
     [Fact]
+    public async Task Mensagem_publicada_leva_o_trace_da_requisicao_que_gerou_o_evento()
+    {
+        var fila = await CriarFilaLigadaAoExchangeAsync();
+        var traceId = System.Diagnostics.ActivityTraceId.CreateRandom().ToHexString();
+        var request = new HttpRequestMessage(HttpMethod.Post, "/lancamentos")
+        {
+            Content = JsonContent.Create(new { data = DataUnica(), tipo = "Debito", valor = 3m, descricao = "Com trace" })
+        };
+        request.Headers.Add("traceparent", $"00-{traceId}-{System.Diagnostics.ActivitySpanId.CreateRandom().ToHexString()}-01");
+        var criado = (await (await _client.SendAsync(request, Ct)).Content.ReadFromJsonAsync<LancamentoResponse>(Ct))!;
+
+        var (propriedades, _) = Assert.Single(await LerMensagensAsync(fila, quantidade: 1, lancamentoId: criado.Id));
+
+        // O RabbitMQ entrega os headers de texto como bytes.
+        var traceparent = System.Text.Encoding.UTF8.GetString((byte[])propriedades.Headers!["traceparent"]!);
+        Assert.Contains(traceId, traceparent);
+    }
+
+    [Fact]
     public async Task Eventos_sao_publicados_na_ordem_em_que_foram_criados()
     {
         var fila = await CriarFilaLigadaAoExchangeAsync();

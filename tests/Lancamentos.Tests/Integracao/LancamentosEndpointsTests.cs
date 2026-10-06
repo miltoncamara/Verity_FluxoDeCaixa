@@ -61,6 +61,26 @@ public class LancamentosEndpointsTests(LancamentosApiFactory factory)
     }
 
     [Fact]
+    public async Task Post_guarda_o_contexto_do_trace_da_requisicao_junto_com_o_evento()
+    {
+        // O cliente chega com um trace já iniciado, como faria um sistema instrumentado com OpenTelemetry.
+        var traceId = System.Diagnostics.ActivityTraceId.CreateRandom().ToHexString();
+        var request = new HttpRequestMessage(HttpMethod.Post, "/lancamentos")
+        {
+            Content = JsonContent.Create(new { data = DataUnica(), tipo = "Credito", valor = 5m, descricao = "Com trace" })
+        };
+        request.Headers.Add("traceparent", $"00-{traceId}-{System.Diagnostics.ActivitySpanId.CreateRandom().ToHexString()}-01");
+
+        var resposta = await _client.SendAsync(request, Ct);
+
+        var criado = await resposta.Content.ReadFromJsonAsync<LancamentoResponse>(Ct);
+        await using var db = factory.CriarDbContext();
+        var (mensagem, _) = Assert.Single(await EventosDoLancamento(db, criado!.Id));
+        Assert.NotNull(mensagem.TraceParent);
+        Assert.Contains(traceId, mensagem.TraceParent);
+    }
+
+    [Fact]
     public async Task Post_repetido_com_mesma_idempotency_key_nao_duplica()
     {
         var chave = Guid.NewGuid().ToString();
