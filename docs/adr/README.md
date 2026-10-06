@@ -14,3 +14,4 @@ Cada ADR registra uma decisão, o contexto em que ela foi tomada e as suas conse
 | [0008](0008-escalabilidade-horizontal.md) | Escalabilidade horizontal com réplicas, balanceador e publicador único |
 | [0009](0009-seguranca.md) | Segurança das APIs |
 | [0010](0010-observabilidade.md) | Observabilidade com OpenTelemetry |
+| [0011](0011-idempotencia-no-registro.md) | Idempotência no registro de lançamentos |

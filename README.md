@@ -174,7 +174,7 @@ dotnet run --project src/Consolidado.Api
 
 ## Exemplos de chamadas
 
-Registrar um crédito. O header `Idempotency-Key` é opcional. Se a mesma chave for enviada de novo, a API devolve o lançamento original sem duplicar.
+Registrar um crédito. O header `Idempotency-Key` é **obrigatório** e identifica a venda, por exemplo o número do cupom. Repetir o pedido com a mesma chave devolve o lançamento original, sem duplicar ([ADR 0011](docs/adr/0011-idempotencia-no-registro.md)).
 
 ```bash
 curl -i -X POST http://localhost:5001/lancamentos \
@@ -184,10 +184,10 @@ curl -i -X POST http://localhost:5001/lancamentos \
   -d '{"data":"2026-10-05","tipo":"Credito","valor":250.00,"descricao":"Venda balcao"}'
 ```
 
-Resposta `201 Created`. Repetir a mesma chamada retorna `200 OK` com o mesmo lançamento.
+Resposta `201 Created`. Repetir a mesma chamada retorna `200 OK` com o mesmo lançamento. A mesma chave com outro conteúdo retorna `422`, e sem a chave a resposta é `400`.
 
 ```json
-{"id":"01a10e47-1818-7c0c-92b2-78ba6e66ff44","data":"2026-10-05","tipo":"Credito","valor":250.00,"descricao":"Venda balcao","criadoEm":"2026-10-05T22:55:02.68104+00:00"}
+{"id":"01a10e47-1818-7c0c-92b2-78ba6e66ff44","data":"2026-10-05","tipo":"Credito","valor":250.00,"descricao":"Venda balcao","criadoEm":"2026-10-05T22:55:02.68104+00:00","criadoPor":"admin"}
 ```
 
 Registrar um débito:
@@ -196,6 +196,7 @@ Registrar um débito:
 curl -X POST http://localhost:5001/lancamentos \
   -H "X-Api-Key: local-dev-key" \
   -H "Content-Type: application/json" \
+  -H "Idempotency-Key: pagamento-0001" \
   -d '{"data":"2026-10-05","tipo":"Debito","valor":80.10,"descricao":"Fornecedor"}'
 ```
 
@@ -248,6 +249,7 @@ Um lançamento inválido devolve `400` com os erros por campo:
 curl -X POST http://localhost:5001/lancamentos \
   -H "X-Api-Key: local-dev-key" \
   -H "Content-Type: application/json" \
+  -H "Idempotency-Key: invalido-0001" \
   -d '{"data":"2026-10-05","tipo":"Pix","valor":0,"descricao":""}'
 ```
 
@@ -264,7 +266,7 @@ curl -i -H "X-Api-Key: local-pdv-key" http://localhost:5002/consolidado/2026-10-
 O cliente `bi` lê, mas não registra:
 
 ```bash
-curl -i -X POST http://localhost:5001/lancamentos -H "X-Api-Key: local-bi-key" -H "Content-Type: application/json" -d '{"data":"2026-10-05","tipo":"Credito","valor":10,"descricao":"Teste"}'
+curl -i -X POST http://localhost:5001/lancamentos -H "X-Api-Key: local-bi-key" -H "Content-Type: application/json" -H "Idempotency-Key: bi-0001" -d '{"data":"2026-10-05","tipo":"Credito","valor":10,"descricao":"Teste"}'
 ```
 
 Acima de 20 requisições por segundo, o `bi` passa a receber `429`:
@@ -294,7 +296,7 @@ $h = @{ "X-Api-Key" = "local-dev-key" }
 ```
 
 ```powershell
-Invoke-RestMethod -Method Post -Uri http://localhost:5001/lancamentos -Headers $h -ContentType "application/json; charset=utf-8" -Body '{"data":"2026-10-05","tipo":"Credito","valor":250.00,"descricao":"Venda balcão"}'
+Invoke-RestMethod -Method Post -Uri http://localhost:5001/lancamentos -Headers ($h + @{ "Idempotency-Key" = "venda-ps-0001" }) -ContentType "application/json; charset=utf-8" -Body '{"data":"2026-10-05","tipo":"Credito","valor":250.00,"descricao":"Venda balcão"}'
 ```
 
 ```powershell
@@ -313,10 +315,10 @@ Pré-requisitos: .NET 10 SDK e Docker rodando. Os testes de integração usam Te
 dotnet test --solution FluxoCaixa.slnx
 ```
 
-São 101 testes, executados em cerca de 50 segundos:
+São 113 testes, executados em cerca de 50 segundos:
 
 - **Unitários:** validações da entidade `Lancamento`, cálculo do saldo em `SaldoDiario` e montagem do relatório em `RelatorioDoPeriodo` (dias vazios, saldo negativo, acumulado e limite do período).
-- **Integração da Lancamentos.Api:** o POST grava o lançamento e a outbox juntos, a `Idempotency-Key` não duplica (inclusive com 10 requisições simultâneas), a API aceita lançamentos com o RabbitMQ fora, a publicação é ordenada, persistente e confirmada, duas réplicas publicando ao mesmo tempo não duplicam eventos, requisição mal formada devolve 400, além do health check.
+- **Integração da Lancamentos.Api:** o POST grava o lançamento e a outbox juntos, a `Idempotency-Key` não duplica (inclusive com 10 requisições simultâneas), a API aceita lançamentos com o RabbitMQ fora, a publicação é ordenada, persistente e confirmada, duas réplicas publicando ao mesmo tempo não duplicam eventos, requisição mal formada devolve 400, a `Idempotency-Key` é obrigatória e recusa conteúdo diferente com 422, o POST falha em poucos segundos com 503 quando o banco cai, além do health check.
 - **Integração da Consolidado.Api:** o consumidor soma corretamente, ignora evento duplicado, não perde atualizações concorrentes, manda mensagem inválida para a DLQ, limita as reentregas antes da DLQ, usa cache e responde o último valor conhecido com o banco fora. O relatório traz saldo inicial, saldo do dia e acumulado corretos, e um lançamento com data passada corrige o acumulado dos dias seguintes.
 - **Observabilidade:** o contexto do trace do POST é gravado na outbox e segue no header da mensagem, o consumidor continua o mesmo trace, e as métricas contam eventos aplicados e duplicados.
 - **Segurança, nos dois serviços:** `401` sem chave, `403` sem permissão, `429` acima do limite do cliente e nas tentativas com chave inválida, `413` para corpo grande, headers de segurança, auditoria do cliente que registrou, `Idempotency-Key` separada por cliente e a API recusando subir com chave em texto no lugar do hash.
@@ -376,7 +378,8 @@ O workflow [ci.yml](.github/workflows/ci.yml) roda build e testes a cada push. D
 | Atualizações simultâneas do mesmo dia não se perdem | `INSERT ... ON CONFLICT (data) DO UPDATE` somando no banco | `Eventos_diferentes_do_mesmo_dia_em_paralelo_nao_perdem_atualizacao` (50 eventos em paralelo) |
 | Uma mensagem com problema não trava a fila | DLQ para mensagem inválida. Reentrega limitada pela quorum queue para erros inesperados | `Mensagem_invalida_vai_direto_para_a_dead_letter_queue` e `Erro_inesperado_devolve_para_a_fila_ate_o_limite...` |
 | A consulta continua respondendo com o banco do consolidado fora | Último valor conhecido em memória, com `X-Stale-Data` e `Age` | `Com_o_banco_fora_responde_o_ultimo_valor_conhecido_marcado_como_desatualizado` |
-| Repetir um POST não duplica o lançamento | `Idempotency-Key` com índice único no banco | `Post_repetido_com_mesma_idempotency_key_nao_duplica` e `Posts_simultaneos_com_mesma_idempotency_key...` |
+| Repetir um POST não duplica o lançamento | `Idempotency-Key` obrigatória, única por cliente, com o conteúdo conferido (`422` se a chave for reaproveitada) ([ADR 0011](docs/adr/0011-idempotencia-no-registro.md)) | `Post_repetido_com_mesma_idempotency_key_nao_duplica`, `Posts_simultaneos_com_mesma_idempotency_key...`, `Mesma_idempotency_key_com_conteudo_diferente_retorna_422_e_nao_grava` e `Duas_vendas_iguais_com_chaves_diferentes_sao_dois_lancamentos` |
+| Falhar rápido e de forma clara com o banco de lançamentos fora | Limite de 5 s na gravação e resposta `503` com `Retry-After`, em vez de 1 minuto preso nas retentativas | `Com_o_banco_fora_o_post_falha_rapido_com_503_e_retry_after` |
 | Monitoramento: saber que algo deu errado antes do usuário | OpenTelemetry com traces de ponta a ponta, métricas de negócio pensadas para alerta e logs estruturados, por OTLP ([ADR 0010](docs/adr/0010-observabilidade.md)) | `TelemetriaTests`, `Post_guarda_o_contexto_do_trace...` e `Mensagem_publicada_leva_o_trace...` |
 | Segurança: proteger dados e sistemas contra ameaças | Autenticação por cliente, autorização por permissões, rate limiting, limite de corpo, headers OWASP, auditoria e verificação de dependências no CI ([ADR 0009](docs/adr/0009-seguranca.md)). Criptografia pela plataforma na Azure | `ApiKeyTests` e `SegurancaTests` nos dois serviços |
 | Escalabilidade: aguentar mais carga sem degradar | Réplicas sem estado atrás de um balanceador. Publicador único por advisory lock. Consumidores concorrentes. Cache com afinidade por data ([ADR 0008](docs/adr/0008-escalabilidade-horizontal.md)) | `Duas_replicas_publicando_ao_mesmo_tempo...`, o caos com uma réplica parada (0 falhas) e o teste de capacidade: até 10.000 req/s com 0% de perda e p95 abaixo de 25 ms, com 1 e com 2 réplicas ([resultados](docs/carga)) |
