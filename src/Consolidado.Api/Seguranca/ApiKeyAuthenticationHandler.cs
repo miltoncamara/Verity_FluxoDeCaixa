@@ -28,13 +28,15 @@ public sealed class ApiKeyAuthenticationHandler(
         if (chaveRecebida.Length == 0)
             return Task.FromResult(AuthenticateResult.NoResult());
 
-        // Compara com todas as chaves, sempre em tempo constante e sem parar na primeira que bate,
-        // para não revelar pelo tempo de resposta se a chave existe ou quanto dela está certo.
-        var recebida = Encoding.UTF8.GetBytes(chaveRecebida);
+        // A configuração só tem o hash de cada chave. Calcula o hash da chave recebida e compara com
+        // todos, sempre em tempo constante e sem parar no primeiro que bate, para não revelar nada
+        // pelo tempo de resposta. As chaves são longas e aleatórias, então o SHA-256 basta: não há
+        // como achar a chave a partir do hash por tentativa, como aconteceria com uma senha curta.
+        var hashRecebido = SHA256.HashData(Encoding.UTF8.GetBytes(chaveRecebida));
         ClienteDaApi? encontrado = null;
         foreach (var cliente in clientes)
         {
-            if (CryptographicOperations.FixedTimeEquals(recebida, Encoding.UTF8.GetBytes(cliente.Chave)))
+            if (CryptographicOperations.FixedTimeEquals(hashRecebido, cliente.HashDaChave))
                 encontrado = cliente;
         }
 

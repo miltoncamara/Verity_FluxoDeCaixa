@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.AspNetCore.Hosting;
 
 namespace Consolidado.Tests.Integracao;
@@ -28,7 +30,8 @@ public static class ClientesDeTeste
     private static void Cliente(IWebHostBuilder builder, int i, string nome, string chave, string[] permissoes, int limite)
     {
         builder.UseSetting($"Seguranca:Clientes:{i}:Nome", nome);
-        builder.UseSetting($"Seguranca:Clientes:{i}:Chave", chave);
+        // A API só conhece o hash da chave, como em produção.
+        builder.UseSetting($"Seguranca:Clientes:{i}:ChaveSha256", Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(chave))));
         builder.UseSetting($"Seguranca:Clientes:{i}:LimitePorSegundo", limite.ToString());
         for (var p = 0; p < permissoes.Length; p++)
             builder.UseSetting($"Seguranca:Clientes:{i}:Permissoes:{p}", permissoes[p]);

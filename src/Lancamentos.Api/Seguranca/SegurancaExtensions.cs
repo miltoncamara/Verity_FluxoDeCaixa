@@ -103,9 +103,12 @@ public static class SegurancaExtensions
     {
         if (clientes.Count == 0)
             throw new InvalidOperationException("Configure ao menos um cliente em Seguranca:Clientes.");
-        if (clientes.Any(c => string.IsNullOrWhiteSpace(c.Nome) || string.IsNullOrWhiteSpace(c.Chave) || c.LimitePorSegundo <= 0))
-            throw new InvalidOperationException("Todo cliente precisa de Nome, Chave e LimitePorSegundo maior que zero.");
-        if (clientes.Select(c => c.Nome).Distinct().Count() != clientes.Count || clientes.Select(c => c.Chave).Distinct().Count() != clientes.Count)
+        if (clientes.Any(c => string.IsNullOrWhiteSpace(c.Nome) || c.LimitePorSegundo <= 0))
+            throw new InvalidOperationException("Todo cliente precisa de Nome e de LimitePorSegundo maior que zero.");
+        if (clientes.Any(c => c.ChaveSha256.Length != 64 || !c.ChaveSha256.All(char.IsAsciiHexDigit)))
+            throw new InvalidOperationException("ChaveSha256 deve ser o SHA-256 da chave em hexadecimal, com 64 caracteres.");
+        if (clientes.Select(c => c.Nome).Distinct().Count() != clientes.Count
+            || clientes.Select(c => c.ChaveSha256.ToLowerInvariant()).Distinct().Count() != clientes.Count)
             throw new InvalidOperationException("Os nomes e as chaves dos clientes devem ser únicos.");
     }
 }
