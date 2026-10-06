@@ -5,6 +5,28 @@
 
 name: fluxo-caixa
 
+# Clientes da API, usados pelas duas APIs. Cada um tem a própria chave, permissões e limite por segundo.
+# O limite vale por réplica. As chaves têm padrão local-dev só para rodar localmente. Veja .env.example.
+x-clientes-da-api: &clientes-da-api
+  # admin: tudo liberado, com limite alto para os testes de carga e de caos
+  Seguranca__Clientes__0__Nome: admin
+  Seguranca__Clientes__0__Chave: ${API_KEY:-local-dev-key}
+  Seguranca__Clientes__0__Permissoes__0: lancamentos.escrita
+  Seguranca__Clientes__0__Permissoes__1: lancamentos.leitura
+  Seguranca__Clientes__0__Permissoes__2: consolidado.leitura
+  Seguranca__Clientes__0__LimitePorSegundo: 20000
+  # pdv: um ponto de venda, que só registra lançamentos
+  Seguranca__Clientes__1__Nome: pdv
+  Seguranca__Clientes__1__Chave: ${API_KEY_PDV:-local-pdv-key}
+  Seguranca__Clientes__1__Permissoes__0: lancamentos.escrita
+  Seguranca__Clientes__1__LimitePorSegundo: 20
+  # bi: um sistema de relatórios, que só lê
+  Seguranca__Clientes__2__Nome: bi
+  Seguranca__Clientes__2__Chave: ${API_KEY_BI:-local-bi-key}
+  Seguranca__Clientes__2__Permissoes__0: lancamentos.leitura
+  Seguranca__Clientes__2__Permissoes__1: consolidado.leitura
+  Seguranca__Clientes__2__LimitePorSegundo: 20
+
 services:
   postgres-lancamentos:
     image: postgres:17-alpine
@@ -63,7 +85,7 @@ services:
       RabbitMQ__Host: rabbitmq
       RabbitMQ__User: fluxo
       RabbitMQ__Password: ${RABBITMQ_PASSWORD:-local-dev}
-      Seguranca__ApiKey: ${API_KEY:-local-dev-key}
+      <<: *clientes-da-api
     deploy:
       replicas: 2
     # Depende apenas do próprio banco. O RabbitMQ e o consolidado podem estar fora do ar.
@@ -81,7 +103,7 @@ services:
       RabbitMQ__Host: rabbitmq
       RabbitMQ__User: fluxo
       RabbitMQ__Password: ${RABBITMQ_PASSWORD:-local-dev}
-      Seguranca__ApiKey: ${API_KEY:-local-dev-key}
+      <<: *clientes-da-api
     deploy:
       replicas: 2
     # O consumidor reconecta sozinho se o RabbitMQ não estiver de pé.
