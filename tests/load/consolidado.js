@@ -5,6 +5,7 @@
 //   pico     50 req/s no GET /consolidado durante 5 minutos (o requisito)
 //   folga   150 req/s no GET /consolidado durante 2 minutos, logo após o pico (3x o requisito)
 //   escritas 10 req/s no POST /lancamentos durante o pico, para o consumidor trabalhar ao mesmo tempo
+//   relatorio 10 req/s no GET /consolidado?inicio&fim (relatório de 30 dias) durante o pico
 //
 // Perda = resposta 5xx, timeout (mais de 2 s) ou conexão recusada. Qualquer resposta fora de 2xx conta.
 // Rodar com: bash scripts/carga.sh
@@ -43,6 +44,15 @@ export const options = {
       preAllocatedVUs: 5,
       maxVUs: 30,
     },
+    relatorio: {
+      executor: 'constant-arrival-rate',
+      exec: 'lerRelatorio',
+      rate: 10,
+      timeUnit: '1s',
+      duration: DURACAO_PICO,
+      preAllocatedVUs: 5,
+      maxVUs: 30,
+    },
     folga: {
       executor: 'constant-arrival-rate',
       exec: 'lerConsolidado',
@@ -64,10 +74,14 @@ export const options = {
     // Escritas nunca devem falhar por causa da carga de leitura.
     'http_req_failed{scenario:escritas}': ['rate<0.01'],
     'http_req_duration{scenario:escritas}': ['p(95)<500'],
+    // O relatório de 30 dias segue o mesmo SLO da consulta de um dia.
+    'http_req_failed{scenario:relatorio}': ['rate<0.05'],
+    'http_req_duration{scenario:relatorio}': ['p(95)<200'],
     // Sem threshold o k6 não separa as métricas por cenário no resumo, então pedimos as contagens aqui.
     'http_reqs{scenario:pico}': ['count>0'],
     'http_reqs{scenario:folga}': ['count>0'],
     'http_reqs{scenario:escritas}': ['count>0'],
+    'http_reqs{scenario:relatorio}': ['count>0'],
   },
 };
 
@@ -80,6 +94,16 @@ function diaAleatorio() {
 export function lerConsolidado() {
   const resposta = http.get(`${CONSOLIDADO_URL}/consolidado/${diaAleatorio()}`, { headers, timeout: TIMEOUT });
   check(resposta, { 'consolidado 200': (r) => r.status === 200 });
+}
+
+export function lerRelatorio() {
+  const fim = new Date();
+  fim.setUTCDate(fim.getUTCDate() - Math.floor(Math.random() * DIAS_CONSULTADOS));
+  const inicio = new Date(fim);
+  inicio.setUTCDate(inicio.getUTCDate() - 29);
+  const periodo = `inicio=${inicio.toISOString().slice(0, 10)}&fim=${fim.toISOString().slice(0, 10)}`;
+  const resposta = http.get(`${CONSOLIDADO_URL}/consolidado?${periodo}`, { headers, timeout: TIMEOUT });
+  check(resposta, { 'relatorio 200': (r) => r.status === 200 });
 }
 
 export function registrarLancamento() {
@@ -109,19 +133,20 @@ export function handleSummary(data) {
   const markdown = [
     '# Resultado do teste de carga',
     '',
-    `Executado em ${new Date().toISOString()} com k6. Pico de ${DURACAO_PICO} e folga de ${DURACAO_FOLGA}.`,
+    `Executado em ${new Date().toISOString()} com k6, passando pelo nginx, com 2 réplicas de cada API. Pico de ${DURACAO_PICO} e folga de ${DURACAO_FOLGA}.`,
     '',
     '| Cenário | Taxa alvo | Requisições | Perda | Média | p95 | Máximo | Thresholds |',
     '|---|---|---|---|---|---|---|---|',
     linha('pico', '50 req/s GET'),
     linha('folga', '150 req/s GET'),
     linha('escritas', '10 req/s POST'),
+    linha('relatorio', '10 req/s GET 30 dias'),
     '',
     `Iterações descartadas pelo k6 por falta de VUs: ${descartadas}.`,
     '',
     'Perda é qualquer resposta fora de 2xx, timeout acima de 2 s ou conexão recusada.',
-    'Thresholds: perda abaixo de 5% no pico e na folga, abaixo de 1% nas escritas.',
-    'Latência p95 abaixo de 200 ms no pico e abaixo de 500 ms na folga e nas escritas.',
+    'Thresholds: perda abaixo de 5% no pico, na folga e no relatório, abaixo de 1% nas escritas.',
+    'Latência p95 abaixo de 200 ms no pico e no relatório, e abaixo de 500 ms na folga e nas escritas.',
     '',
   ].join('\n');
 
