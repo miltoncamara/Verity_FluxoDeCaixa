@@ -101,6 +101,53 @@ public class LancamentosEndpointsTests(LancamentosApiFactory factory)
     }
 
     [Fact]
+    public async Task Post_sem_idempotency_key_retorna_400()
+    {
+        // Cliente sem a geração automática de chave usada nos outros testes.
+        var semChave = factory.CreateClient();
+        semChave.DefaultRequestHeaders.Add("X-Api-Key", ClientesDeTeste.ChaveCompleta);
+
+        var resposta = await semChave.PostAsJsonAsync("/lancamentos",
+            new { data = DataUnica(), tipo = "Credito", valor = 5m, descricao = "Café" }, Ct);
+
+        Assert.Equal(HttpStatusCode.BadRequest, resposta.StatusCode);
+        var problema = await resposta.Content.ReadFromJsonAsync<JsonElement>(Ct);
+        Assert.True(problema.GetProperty("errors").TryGetProperty("idempotencyKey", out _));
+    }
+
+    [Fact]
+    public async Task Mesma_idempotency_key_com_conteudo_diferente_retorna_422_e_nao_grava()
+    {
+        var chave = Guid.NewGuid().ToString();
+        var dia = DataUnica();
+
+        var original = await PostComChave(new { data = dia, tipo = "Credito", valor = 5m, descricao = "Café" }, chave);
+        var reaproveitada = await PostComChave(new { data = dia, tipo = "Credito", valor = 7m, descricao = "Café" }, chave);
+
+        Assert.Equal(HttpStatusCode.Created, original.StatusCode);
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, reaproveitada.StatusCode);
+        await using var db = factory.CriarDbContext();
+        var lancamento = await db.Lancamentos.SingleAsync(l => l.IdempotencyKey == chave, Ct);
+        Assert.Equal(5m, lancamento.Valor);
+    }
+
+    [Fact]
+    public async Task Duas_vendas_iguais_com_chaves_diferentes_sao_dois_lancamentos()
+    {
+        // O motivo de a chave vir do cliente: duas vendas idênticas no mesmo dia são legítimas.
+        var dia = DataUnica();
+        var venda = new { data = dia, tipo = "Credito", valor = 5m, descricao = "Café" };
+
+        var primeira = await PostComChave(venda, "cupom-001");
+        var segunda = await PostComChave(venda, "cupom-002");
+
+        Assert.Equal(HttpStatusCode.Created, primeira.StatusCode);
+        Assert.Equal(HttpStatusCode.Created, segunda.StatusCode);
+        var lancamentos = await _client.GetFromJsonAsync<List<LancamentoResponse>>($"/lancamentos?data={dia:yyyy-MM-dd}", Ct);
+        Assert.Equal(2, lancamentos!.Count);
+    }
+
+    [Fact]
     public async Task Posts_simultaneos_com_mesma_idempotency_key_geram_um_unico_lancamento()
     {
         var chave = Guid.NewGuid().ToString();

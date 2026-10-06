@@ -17,6 +17,10 @@ public sealed class Lancamento
     public decimal Valor { get; private init; }
     public string Descricao { get; private init; } = "";
     public DateTimeOffset CriadoEm { get; private init; }
+    /// <summary>
+    /// Chave enviada pelo cliente no header Idempotency-Key. Identifica o pedido: repetir o pedido com a
+    /// mesma chave devolve o lançamento original. É opcional só nos lançamentos antigos, anteriores à regra.
+    /// </summary>
     public string? IdempotencyKey { get; private init; }
 
     /// <summary>Cliente da API que registrou o lançamento, para auditoria.</summary>
@@ -29,7 +33,7 @@ public sealed class Lancamento
     /// Cria um lançamento válido ou devolve os erros de validação por campo.
     /// </summary>
     public static (Lancamento? Lancamento, Dictionary<string, string> Erros) Criar(
-        DateOnly? data, string? tipo, decimal? valor, string? descricao, string criadoPor, string? idempotencyKey = null)
+        DateOnly? data, string? tipo, decimal? valor, string? descricao, string criadoPor, string? idempotencyKey)
     {
         // Quem registrou vem da autenticação, não do cliente. Se faltar, é erro de programação.
         ArgumentException.ThrowIfNullOrWhiteSpace(criadoPor);
@@ -55,8 +59,12 @@ public sealed class Lancamento
         else if (descricao.Trim().Length > DescricaoTamanhoMaximo)
             erros["descricao"] = $"Descrição deve ter no máximo {DescricaoTamanhoMaximo} caracteres.";
 
-        if (idempotencyKey is not null && (idempotencyKey.Length == 0 || idempotencyKey.Length > IdempotencyKeyTamanhoMaximo))
-            erros["idempotencyKey"] = $"Idempotency-Key deve ter entre 1 e {IdempotencyKeyTamanhoMaximo} caracteres.";
+        // A chave é obrigatória: só o cliente sabe se um pedido é uma venda nova ou a repetição de um
+        // pedido que ficou sem resposta. Duas vendas iguais no mesmo dia são legítimas e comuns.
+        if (string.IsNullOrWhiteSpace(idempotencyKey))
+            erros["idempotencyKey"] = "O header Idempotency-Key é obrigatório.";
+        else if (idempotencyKey.Length > IdempotencyKeyTamanhoMaximo)
+            erros["idempotencyKey"] = $"Idempotency-Key deve ter no máximo {IdempotencyKeyTamanhoMaximo} caracteres.";
 
         if (erros.Count > 0)
             return (null, erros);
@@ -74,6 +82,14 @@ public sealed class Lancamento
         };
         return (lancamento, erros);
     }
+
+    /// <summary>
+    /// Diz se outro lançamento descreve a mesma operação: mesma data, tipo, valor e descrição.
+    /// Usado quando um pedido chega com uma Idempotency-Key já usada. Se o conteúdo for o mesmo, é uma
+    /// repetição legítima. Se for diferente, o cliente reaproveitou a chave por engano.
+    /// </summary>
+    public bool TemOMesmoConteudoQue(Lancamento outro) =>
+        Data == outro.Data && Tipo == outro.Tipo && Valor == outro.Valor && Descricao == outro.Descricao;
 
     // O PostgreSQL guarda timestamps com precisão de microssegundos. Truncar aqui garante que a resposta
     // do POST e a resposta de uma repetição com a mesma Idempotency-Key sejam idênticas.

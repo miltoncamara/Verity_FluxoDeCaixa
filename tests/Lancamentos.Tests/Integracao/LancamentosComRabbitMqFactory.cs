@@ -32,7 +32,7 @@ public sealed class LancamentosComRabbitMqFactory : WebApplicationFactory<Progra
 
     public HttpClient CriarClienteAutenticado(string chave = ClientesDeTeste.ChaveCompleta)
     {
-        var client = CreateClient();
+        var client = CreateDefaultClient(new IdempotencyKeyAutomatica());
         client.DefaultRequestHeaders.Add("X-Api-Key", chave);
         return client;
     }

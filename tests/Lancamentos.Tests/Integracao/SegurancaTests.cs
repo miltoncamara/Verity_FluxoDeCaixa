@@ -109,7 +109,11 @@ public class SegurancaTests(LancamentosApiFactory factory)
     {
         var descricaoGigante = new string('x', (int)SegurancaExtensions.TamanhoMaximoDoCorpo);
 
-        var resposta = await factory.CriarClienteAutenticado().PostAsJsonAsync("/lancamentos", NovoLancamento(descricaoGigante), Ct);
+        // StringContent declara o Content-Length, e a API recusa antes de ler o corpo. Corpos sem tamanho
+        // declarado são barrados pelo limite do Kestrel e do nginx, que não existem no servidor de teste.
+        var corpo = new StringContent(System.Text.Json.JsonSerializer.Serialize(NovoLancamento(descricaoGigante)),
+            System.Text.Encoding.UTF8, "application/json");
+        var resposta = await factory.CriarClienteAutenticado().PostAsync("/lancamentos", corpo, Ct);
 
         Assert.Equal(HttpStatusCode.RequestEntityTooLarge, resposta.StatusCode);
     }
