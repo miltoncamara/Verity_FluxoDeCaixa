@@ -110,7 +110,9 @@ export function registrarLancamento() {
   const tipo = Math.random() < 0.7 ? 'Credito' : 'Debito';
   const valor = Math.round((1 + Math.random() * 500) * 100) / 100;
   const corpo = JSON.stringify({ data: diaAleatorio(), tipo, valor, descricao: 'teste de carga' });
-  const resposta = http.post(`${LANCAMENTOS_URL}/lancamentos`, corpo, { headers, timeout: TIMEOUT });
+  // Cada iteração é uma venda nova, então cada uma tem a sua Idempotency-Key.
+  const comChave = { ...headers, 'Idempotency-Key': `carga-${__VU}-${__ITER}-${Date.now()}` };
+  const resposta = http.post(`${LANCAMENTOS_URL}/lancamentos`, corpo, { headers: comChave, timeout: TIMEOUT });
   check(resposta, { 'lancamento 201': (r) => r.status === 201 });
 }
 
