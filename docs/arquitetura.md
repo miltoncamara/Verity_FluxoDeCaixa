@@ -41,7 +41,7 @@ flowchart TB
 
     subgraph Consolidado[Serviço de consolidado]
         Cons[LancamentoRegistradoConsumer<br/>em cada réplica, consumidores concorrentes]
-        CApi[Consolidado.Api x2 réplicas<br/>ASP.NET Core Minimal API<br/>GET /consolidado/data<br/>cache em memória]
+        CApi[Consolidado.Api x2 réplicas<br/>ASP.NET Core Minimal API<br/>GET /consolidado/data e relatório por período<br/>cache em memória]
         CDb[(PostgreSQL consolidado<br/>tabelas saldo_diario e eventos_processados)]
     end
 
@@ -66,7 +66,7 @@ flowchart TB
 | OutboxPublisher | Publica os eventos pendentes no RabbitMQ, em ordem. Roda em todas as réplicas, mas um advisory lock do PostgreSQL deixa só uma publicar por vez | PostgreSQL de lançamentos e RabbitMQ. Se o RabbitMQ estiver fora, espera e tenta de novo |
 | RabbitMQ | Guarda e entrega os eventos | Nada |
 | LancamentoRegistradoConsumer | Aplica cada evento ao saldo do dia, uma única vez. As réplicas consomem a mesma fila em paralelo | RabbitMQ e PostgreSQL do consolidado |
-| Consolidado.Api | Responde o saldo de um dia | PostgreSQL do consolidado. Se ele cair, usa o último valor conhecido em memória |
+| Consolidado.Api | Responde o saldo de um dia e o relatório de um período, com saldo do dia e saldo acumulado | PostgreSQL do consolidado. Se ele cair, usa o último valor conhecido em memória |
 
 O publicador e o consumidor rodam como `BackgroundService` dentro das APIs. Isso simplifica a entrega e a execução local. Em produção cada um pode virar um processo separado sem mudar o código das classes (ver [ADR 0007](adr/0007-simplificacoes-assumidas.md)).
 
@@ -147,6 +147,13 @@ sequenceDiagram
 ```
 
 A leitura nunca soma lançamentos. Ela busca uma única linha pela chave primária `data`. Um dia sem lançamentos devolve saldo zero.
+
+O relatório de um período (`GET /consolidado?inicio=&fim=`) segue o mesmo caminho de cache e fallback. No banco ele faz duas leituras na tabela `saldo_diario`:
+
+1. A soma das linhas diárias anteriores ao período, que dá o saldo inicial do caixa.
+2. As linhas do período, buscadas pela chave.
+
+Com isso a aplicação monta uma linha por dia, preenche com zero os dias sem movimento e calcula o saldo acumulado. O acumulado não é gravado no banco. Por isso um lançamento registrado com data passada corrige sozinho o acumulado de todos os dias seguintes ([ADR 0005](adr/0005-saldo-pre-calculado.md)).
 
 ## Topologia do RabbitMQ
 

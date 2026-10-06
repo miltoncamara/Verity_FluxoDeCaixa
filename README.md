@@ -1,11 +1,11 @@
 # Fluxo de Caixa
 
-Solução para um comerciante controlar o fluxo de caixa diário. Ela registra lançamentos de débito e crédito e informa o saldo consolidado de cada dia.
+Solução para um comerciante controlar o fluxo de caixa diário. Ela registra lançamentos de débito e crédito e oferece um relatório com o saldo diário consolidado de qualquer período.
 
 São dois serviços independentes, cada um com seu próprio banco. Eles conversam apenas por eventos assíncronos no RabbitMQ. Não existe chamada HTTP entre eles.
 
 - **Lancamentos.Api** registra e lista os lançamentos.
-- **Consolidado.Api** mantém o saldo de cada dia já calculado e responde a consulta do saldo.
+- **Consolidado.Api** mantém o saldo de cada dia já calculado e responde a consulta de um dia e o relatório de um período, com o saldo do dia e o saldo acumulado do caixa.
 
 Stack: .NET 10, ASP.NET Core Minimal APIs, PostgreSQL com EF Core, RabbitMQ (RabbitMQ.Client, sem frameworks de mensageria), xUnit com Testcontainers, k6 e docker compose.
 
@@ -16,6 +16,7 @@ Stack: .NET 10, ASP.NET Core Minimal APIs, PostgreSQL com EF Core, RabbitMQ (Rab
 - [Como rodar](#como-rodar)
 - [Exemplos de chamadas](#exemplos-de-chamadas)
 - [Como rodar os testes](#como-rodar-os-testes)
+- [Requisitos de negócio e como são atendidos](#requisitos-de-negócio-e-como-são-atendidos)
 - [Requisitos não funcionais e como são comprovados](#requisitos-não-funcionais-e-como-são-comprovados)
 - [Estrutura do repositório](#estrutura-do-repositório)
 - [Premissas e simplificações](#premissas-e-simplificações)
@@ -60,7 +61,7 @@ O fluxo de um lançamento:
 2. A API grava o lançamento e o evento `LancamentoRegistrado` na tabela `outbox`, na mesma transação, e responde `201`.
 3. O publicador da outbox, que roda dentro da Lancamentos.Api, lê os eventos pendentes a cada 500 ms e os publica no RabbitMQ. Cada evento só é marcado como publicado depois da confirmação do broker.
 4. O consumidor, que roda dentro da Consolidado.Api, recebe o evento e atualiza a tabela `saldo_diario` de forma idempotente. Só depois do commit ele confirma a mensagem.
-5. A Consolidado.Api responde o saldo de um dia lendo essa tabela por chave, com cache em memória de 5 s.
+5. A Consolidado.Api responde o saldo de um dia e o relatório de um período lendo essa tabela, com cache em memória de 5 s. Ela nunca soma lançamentos.
 
 Cada API roda com 2 réplicas atrás de um nginx, que distribui a carga. Só uma réplica publica a outbox por vez, e as réplicas do consolidado consomem a mesma fila em paralelo ([ADR 0008](docs/adr/0008-escalabilidade-horizontal.md)).
 
@@ -171,7 +172,32 @@ curl -i -H "X-Api-Key: local-dev-key" http://localhost:5002/consolidado/2026-10-
 {"data":"2026-10-05","totalCreditos":250.00,"totalDebitos":80.10,"saldo":169.90}
 ```
 
-Se o banco do consolidado estiver fora, a resposta é o último valor conhecido, com os headers `X-Stale-Data: true` e `Age` (os segundos desde a última leitura no banco). Se o dia nunca foi lido antes, a resposta é `503` com `Retry-After`.
+Gerar o relatório de um período, com uma linha por dia:
+
+```bash
+curl -H "X-Api-Key: local-dev-key" "http://localhost:5002/consolidado?inicio=2026-10-01&fim=2026-10-03"
+```
+
+```json
+{
+  "inicio": "2026-10-01", "fim": "2026-10-03",
+  "saldoInicial": 0, "totalCreditos": 1300.00, "totalDebitos": 700.00, "saldoFinal": 600.00,
+  "dias": [
+    {"data":"2026-10-01","totalCreditos":1000.00,"totalDebitos":200.00,"saldoDoDia":800.00,"saldoAcumulado":800.00},
+    {"data":"2026-10-02","totalCreditos":300.00,"totalDebitos":500.00,"saldoDoDia":-200.00,"saldoAcumulado":600.00},
+    {"data":"2026-10-03","totalCreditos":0,"totalDebitos":0,"saldoDoDia":0,"saldoAcumulado":600.00}
+  ]
+}
+```
+
+- **`saldoDoDia`** é o resultado do dia: créditos menos débitos daquele dia.
+- **`saldoAcumulado`** é quanto há no caixa no fim do dia: o saldo anterior mais o saldo do dia.
+- **`saldoInicial`** é o saldo do caixa antes do primeiro dia do período, calculado a partir de todos os dias anteriores.
+- Dias sem movimento aparecem zerados. O período pode ter até 366 dias.
+
+As datas devem estar no formato `yyyy-MM-dd`. Qualquer outro formato devolve `400`, para evitar ambiguidade entre `07-10-2026` lido como dia 7 de outubro ou 10 de julho.
+
+Se o banco do consolidado estiver fora, a consulta de um dia e o relatório respondem o último valor conhecido, com os headers `X-Stale-Data: true` e `Age` (os segundos desde a última leitura no banco). Se aquele dia ou período nunca foi lido antes, a resposta é `503` com `Retry-After`.
 
 Um lançamento inválido devolve `400` com os erros por campo:
 
@@ -198,6 +224,24 @@ curl http://localhost:5002/health
 
 > No Git Bash do Windows, evite acentos dentro do `-d` do curl. O terminal não envia o texto em UTF-8 e a API responde `400` por JSON inválido. A API aceita acentos normalmente, como mostram os testes de integração.
 
+### No PowerShell do Windows
+
+No Windows PowerShell, `curl` é um apelido de outro comando. Use o `Invoke-RestMethod` e informe `charset=utf-8`, senão os acentos são enviados em outra codificação e a API responde `400`.
+
+```powershell
+$h = @{ "X-Api-Key" = "local-dev-key" }
+```
+
+```powershell
+Invoke-RestMethod -Method Post -Uri http://localhost:5001/lancamentos -Headers $h -ContentType "application/json; charset=utf-8" -Body '{"data":"2026-10-05","tipo":"Credito","valor":250.00,"descricao":"Venda balcão"}'
+```
+
+```powershell
+Invoke-RestMethod -Uri "http://localhost:5002/consolidado?inicio=2026-10-01&fim=2026-10-31" -Headers $h
+```
+
+Para ver o status e os headers de uma resposta de erro, use `curl.exe -i`, que é o curl de verdade.
+
 ## Como rodar os testes
 
 ### Unitários e de integração
@@ -208,11 +252,11 @@ Pré-requisitos: .NET 10 SDK e Docker rodando. Os testes de integração usam Te
 dotnet test --solution FluxoCaixa.slnx
 ```
 
-São 59 testes, executados em cerca de 40 segundos:
+São 79 testes, executados em cerca de 45 segundos:
 
-- **Unitários:** validações da entidade `Lancamento` e cálculo do saldo em `SaldoDiario`.
-- **Integração da Lancamentos.Api:** o POST grava o lançamento e a outbox juntos, a `Idempotency-Key` não duplica (inclusive com 10 requisições simultâneas), a API aceita lançamentos com o RabbitMQ fora, a publicação é ordenada, persistente e confirmada, duas réplicas publicando ao mesmo tempo não duplicam eventos, além de API Key e health check.
-- **Integração da Consolidado.Api:** o consumidor soma corretamente, ignora evento duplicado, não perde atualizações concorrentes, manda mensagem inválida para a DLQ, limita as reentregas antes da DLQ, usa cache e responde o último valor conhecido com o banco fora.
+- **Unitários:** validações da entidade `Lancamento`, cálculo do saldo em `SaldoDiario` e montagem do relatório em `RelatorioDoPeriodo` (dias vazios, saldo negativo, acumulado e limite do período).
+- **Integração da Lancamentos.Api:** o POST grava o lançamento e a outbox juntos, a `Idempotency-Key` não duplica (inclusive com 10 requisições simultâneas), a API aceita lançamentos com o RabbitMQ fora, a publicação é ordenada, persistente e confirmada, duas réplicas publicando ao mesmo tempo não duplicam eventos, requisição mal formada devolve 400, além de API Key e health check.
+- **Integração da Consolidado.Api:** o consumidor soma corretamente, ignora evento duplicado, não perde atualizações concorrentes, manda mensagem inválida para a DLQ, limita as reentregas antes da DLQ, usa cache e responde o último valor conhecido com o banco fora. O relatório traz saldo inicial, saldo do dia e acumulado corretos, e um lançamento com data passada corrige o acumulado dos dias seguintes.
 
 ### Carga com k6
 
@@ -222,7 +266,7 @@ Com a solução no ar (`docker compose up -d --build`):
 bash scripts/carga.sh
 ```
 
-O k6 roda em um container, dentro da rede do compose. São 5 minutos a 50 req/s no `GET /consolidado`, seguidos de 2 minutos a 150 req/s. Durante o pico, 10 POSTs por segundo chegam à Lancamentos.Api. O resultado é salvo em [docs/carga/resultado-k6.md](docs/carga/resultado-k6.md).
+O k6 roda em um container, dentro da rede do compose, e passa pelo nginx como um cliente real. São 5 minutos a 50 req/s no `GET /consolidado/{data}`, seguidos de 2 minutos a 150 req/s. Durante o pico, chegam também 10 POSTs por segundo à Lancamentos.Api e 10 relatórios de 30 dias por segundo à Consolidado.Api. O resultado é salvo em [docs/carga/resultado-k6.md](docs/carga/resultado-k6.md).
 
 ### Capacidade
 
@@ -250,12 +294,20 @@ O script sobe tudo e envia lançamentos sem parar. Enquanto isso ele para uma r�
 
 O workflow [ci.yml](.github/workflows/ci.yml) roda build e testes a cada push. Depois roda o teste de caos e uma versão curta do teste de carga, com os mesmos thresholds.
 
+## Requisitos de negócio e como são atendidos
+
+| Requisito | Como é atendido | Teste que comprova |
+|---|---|---|
+| Controlar o fluxo de caixa diário com lançamentos de débito e crédito | `POST /lancamentos` registra, `GET /lancamentos?data=` lista o dia e `GET /lancamentos/{id}` busca um lançamento. Valor positivo com até 2 casas, tipo e descrição validados | `LancamentoTests` e `LancamentosEndpointsTests` |
+| Relatório com o saldo diário consolidado | `GET /consolidado?inicio=&fim=` devolve um dia por linha, com créditos, débitos, saldo do dia e saldo acumulado, além dos totais do período. `GET /consolidado/{data}` consulta um único dia | `RelatorioDoPeriodoTests` e `RelatorioTests` |
+| O relatório deve refletir lançamentos com data passada | O saldo acumulado é calculado na leitura a partir dos saldos diários, então um lançamento atrasado corrige todos os dias seguintes ([ADR 0005](docs/adr/0005-saldo-pre-calculado.md)) | `Lancamento_com_data_passada_corrige_o_acumulado_de_todos_os_dias_seguintes` |
+
 ## Requisitos não funcionais e como são comprovados
 
 | Requisito | Decisão | Teste que comprova |
 |---|---|---|
 | O serviço de lançamentos não fica indisponível se o consolidado cair | Dois serviços com bancos separados ([ADR 0001](docs/adr/0001-dois-servicos.md)). Comunicação apenas assíncrona ([ADR 0002](docs/adr/0002-comunicacao-assincrona.md)). A Lancamentos.Api depende só do próprio banco, e o health check olha só esse banco | [caos.sh](scripts/caos.sh) mata o consolidado e o RabbitMQ: 326 POSTs, 0 falhas. Testes `Post_e_confirmado_mesmo_com_rabbitmq_fora_do_ar...` e `Health_nao_exige_api_key_e_ignora_o_rabbitmq_fora_do_ar` |
-| 50 req/s no consolidado com no máximo 5% de perda | Saldo pré-calculado, lido por chave ([ADR 0005](docs/adr/0005-saldo-pre-calculado.md)). Cache em memória de 5 s. Limite de 2 s na leitura do banco | k6: 15.001 requisições a 50 req/s com 0% de perda e p95 de 2,1 ms. A 150 req/s, 0% de perda ([resultado](docs/carga/resultado-k6.md)) |
+| 50 req/s no consolidado com no máximo 5% de perda | Saldo pré-calculado, lido por chave ([ADR 0005](docs/adr/0005-saldo-pre-calculado.md)). Cache em memória de 5 s. Limite de 2 s na leitura do banco | k6 passando pelo nginx: 15.001 requisições a 50 req/s com 0% de perda e p95 de 2,3 ms. A 150 req/s, 0% de perda. O relatório de 30 dias, a 10 req/s, teve p95 de 3,7 ms ([resultado](docs/carga/resultado-k6.md)) |
 | Nenhum lançamento confirmado se perde | Outbox no mesmo banco e na mesma transação ([ADR 0003](docs/adr/0003-outbox-no-mesmo-banco.md)). Publisher confirms, mensagem persistente e `mandatory` | `Post_grava_lancamento_e_evento_na_outbox_na_mesma_operacao`, `OutboxPublisherTests` e o caos (85 eventos retidos na outbox e entregues depois) |
 | O saldo não soma o mesmo lançamento duas vezes | Consumidor idempotente com `eventos_processados` na mesma transação ([ADR 0004](docs/adr/0004-consumidor-idempotente.md)) | `Evento_entregue_duas_vezes_e_somado_uma_unica_vez` e `Mesmo_evento_aplicado_em_paralelo_soma_uma_unica_vez` |
 | Atualizações simultâneas do mesmo dia não se perdem | `INSERT ... ON CONFLICT (data) DO UPDATE` somando no banco | `Eventos_diferentes_do_mesmo_dia_em_paralelo_nao_perdem_atualizacao` (50 eventos em paralelo) |

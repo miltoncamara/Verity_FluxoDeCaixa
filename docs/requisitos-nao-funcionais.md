@@ -12,10 +12,11 @@ Este documento transforma esses requisitos em metas mensuráveis, define o que c
 | Indicador | Meta | Como é medido | Resultado |
 |---|---|---|---|
 | Disponibilidade do `POST /lancamentos` com o consolidado ou o RabbitMQ fora | 100% dos POSTs confirmados, desde que o banco de lançamentos esteja no ar | [caos.sh](../scripts/caos.sh) | 326 POSTs, 0 falhas ([resultado](caos/resultado-caos.md)) |
-| Perda no `GET /consolidado` a 50 req/s | No máximo 5% (requisito). Meta interna: abaixo de 1% | k6, cenário `pico`, 5 minutos | 0,00% em 15.001 requisições ([resultado](carga/resultado-k6.md)) |
-| Perda no `GET /consolidado` a 150 req/s | No máximo 5% | k6, cenário `folga`, 2 minutos | 0,00% em 18.001 requisições |
-| Latência do `GET /consolidado` a 50 req/s | p95 abaixo de 200 ms | k6, cenário `pico` | p95 de 2,1 ms |
-| Latência do `POST /lancamentos` durante o pico de leitura | p95 abaixo de 500 ms | k6, cenário `escritas`, 10 req/s | p95 de 4,1 ms |
+| Perda no `GET /consolidado` a 50 req/s | No máximo 5% (requisito). Meta interna: abaixo de 1% | k6, cenário `pico`, 5 minutos | 0,00% em 15.001 requisições, passando pelo nginx com 2 réplicas ([resultado](carga/resultado-k6.md)) |
+| Perda no `GET /consolidado` a 150 req/s | No máximo 5% | k6, cenário `folga`, 2 minutos | 0,00% em 18.000 requisições |
+| Latência do `GET /consolidado` a 50 req/s | p95 abaixo de 200 ms | k6, cenário `pico` | p95 de 2,3 ms |
+| Latência do `POST /lancamentos` durante o pico de leitura | p95 abaixo de 500 ms | k6, cenário `escritas`, 10 req/s | p95 de 4,5 ms |
+| Relatório de 30 dias (`GET /consolidado?inicio=&fim=`) durante o pico | p95 abaixo de 200 ms | k6, cenário `relatorio`, 10 req/s | 0,00% de perda e p95 de 3,7 ms |
 | Durabilidade | Nenhum lançamento confirmado com `201` se perde | Testes de integração e caos | Confirmado. O saldo convergiu centavo por centavo |
 | Atraso do consolidado em operação normal | Poucos segundos entre o `201` e o saldo atualizado | Estimativa pelo desenho | Até cerca de 6 s: até 0,5 s do ciclo da outbox, alguns milissegundos de processamento e até 5 s de cache |
 
@@ -23,7 +24,7 @@ Os números de carga foram medidos numa única máquina (Windows 11 com Docker D
 
 ### Por que a solução aguenta a carga
 
-- **Leitura por chave.** O `GET /consolidado/{data}` busca uma única linha pela chave primária. Ele nunca soma lançamentos, então o custo não cresce com o volume do dia ([ADR 0005](adr/0005-saldo-pre-calculado.md)).
+- **Leitura por chave.** O `GET /consolidado/{data}` busca uma única linha pela chave primária. O relatório de um período lê uma linha por dia. Nenhum dos dois soma lançamentos, então o custo não cresce com o volume do dia ([ADR 0005](adr/0005-saldo-pre-calculado.md)).
 - **Cache em memória.** Cada data lida fica 5 s em memória. No teste, as leituras se espalham por 90 dias, então parte delas vai ao banco e parte sai do cache.
 - **Limite de 2 s na leitura do banco.** Sem esse limite, as retentativas do EF Core segurariam a requisição por quase um minuto com o banco fora. A 50 req/s isso esgotaria as conexões e derrubaria a API inteira.
 - **Escrita isolada da leitura.** As escritas no saldo chegam pelo consumidor, num ritmo controlado pelo prefetch da fila. Um pico de lançamentos não disputa recursos com as consultas de forma descontrolada.
