@@ -22,6 +22,16 @@ x-postgres-com-tls: &postgres-com-tls
   - -c
   - hba_file=/etc/postgresql/pg_hba.conf
 
+# Telemetria das duas APIs: traces, métricas e logs saem por OTLP para o OpenTelemetry Collector.
+# Para mandar a outro destino, mude só o collector (infra/otel-collector/config.yaml).
+x-observabilidade: &observabilidade
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+  OTEL_RESOURCE_ATTRIBUTES: deployment.environment=local
+  # Logs do console em JSON, prontos para serem lidos por um agente de logs, com TraceId e SpanId
+  # em cada linha para ligar o log ao trace.
+  Logging__Console__FormatterName: json
+  Logging__Console__FormatterOptions__IncludeScopes: "true"
+
 x-clientes-da-api: &clientes-da-api
   # admin: tudo liberado, com limite alto para os testes de carga e de caos
   Seguranca__Clientes__0__Nome: admin
@@ -106,7 +116,7 @@ services:
       RabbitMQ__Host: rabbitmq
       RabbitMQ__User: fluxo
       RabbitMQ__Password: ${RABBITMQ_PASSWORD:-local-dev}
-      <<: *clientes-da-api
+      <<: [*clientes-da-api, *observabilidade]
     deploy:
       replicas: 2
     # Depende apenas do próprio banco. O RabbitMQ e o consolidado podem estar fora do ar.
@@ -124,7 +134,7 @@ services:
       RabbitMQ__Host: rabbitmq
       RabbitMQ__User: fluxo
       RabbitMQ__Password: ${RABBITMQ_PASSWORD:-local-dev}
-      <<: *clientes-da-api
+      <<: [*clientes-da-api, *observabilidade]
     deploy:
       replicas: 2
     # O consumidor reconecta sozinho se o RabbitMQ não estiver de pé.
@@ -143,6 +153,24 @@ services:
     depends_on:
       - lancamentos-api
       - consolidado-api
+    restart: unless-stopped
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.162.0
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./infra/otel-collector/config.yaml:/etc/otelcol/config.yaml:ro
+    depends_on:
+      - aspire-dashboard
+    restart: unless-stopped
+
+  # Visualizador local de traces, métricas e logs: http://localhost:18888
+  aspire-dashboard:
+    image: mcr.microsoft.com/dotnet/aspire-dashboard:13.6.0
+    environment:
+      ASPIRE_DASHBOARD_UNSECURED_ALLOW_ANONYMOUS: "true" # sem login, só para uso local
+    ports:
+      - "18888:18888"
     restart: unless-stopped
 
 volumes:

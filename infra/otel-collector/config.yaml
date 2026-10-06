@@ -1,0 +1,53 @@
+# OpenTelemetry Collector: recebe traces, métricas e logs das APIs por OTLP e envia para os destinos.
+#
+# As APIs só conhecem o collector. Trocar ou acrescentar um destino (Datadog, Azure Monitor, Grafana,
+# New Relic) é mudar este arquivo, sem mexer no código e sem rebuild das APIs.
+# Localmente o destino é o Aspire Dashboard, que mostra os três sinais em http://localhost:18888.
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  # Protege o collector de estourar a memória num pico de telemetria.
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 256
+  # Agrupa os envios para reduzir chamadas aos destinos.
+  batch: {}
+
+exporters:
+  # Visualizador local.
+  otlp/aspire:
+    endpoint: aspire-dashboard:18889
+    tls:
+      insecure: true
+
+  # Datadog: descomente, defina DD_API_KEY no ambiente do collector e inclua "datadog" nos pipelines.
+  # datadog:
+  #   api:
+  #     key: ${env:DD_API_KEY}
+  #     site: datadoghq.com
+
+  # Azure Monitor / Application Insights: descomente, defina a connection string e inclua "azuremonitor".
+  # azuremonitor:
+  #   connection_string: ${env:APPLICATIONINSIGHTS_CONNECTION_STRING}
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlp/aspire]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlp/aspire]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlp/aspire]
