@@ -1,5 +1,8 @@
 # Fluxo de Caixa
 
+[![CI](https://github.com/miltoncamara/Verity_FluxoDeCaixa/actions/workflows/ci.yml/badge.svg)](https://github.com/miltoncamara/Verity_FluxoDeCaixa/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/miltoncamara/Verity_FluxoDeCaixa/actions/workflows/codeql.yml/badge.svg)](https://github.com/miltoncamara/Verity_FluxoDeCaixa/actions/workflows/codeql.yml)
+
 Solução para um comerciante controlar o fluxo de caixa diário. Ela registra lançamentos de débito e crédito e oferece um relatório com o saldo diário consolidado de qualquer período.
 
 São dois serviços independentes, cada um com seu próprio banco. Eles conversam apenas por eventos assíncronos no RabbitMQ. Não existe chamada HTTP entre eles.
