@@ -17,6 +17,7 @@ Stack: .NET 10, ASP.NET Core Minimal APIs, PostgreSQL com EF Core, RabbitMQ (Rab
 - [Arquitetura](#arquitetura)
 - [Invariante central](#invariante-central)
 - [Segurança](#segurança)
+- [Observabilidade](#observabilidade)
 - [Como rodar](#como-rodar)
 - [Exemplos de chamadas](#exemplos-de-chamadas)
 - [Como rodar os testes](#como-rodar-os-testes)
@@ -98,6 +99,20 @@ Por consequência, o consolidado é **eventualmente consistente**. Em operação
 
 O HTTPS na borda, o TLS do broker e a criptografia em repouso ficam a cargo da plataforma. Na Azure eles vêm pelo Front Door, pelo Service Bus e pela criptografia padrão dos serviços gerenciados ([ADR 0009](docs/adr/0009-seguranca.md) e [arquitetura na Azure](docs/arquitetura-azure.md#segurança)).
 
+## Observabilidade
+
+As duas APIs emitem os três pilares com OpenTelemetry e enviam por OTLP a um OpenTelemetry Collector. Localmente o collector repassa ao **Aspire Dashboard**, em http://localhost:18888.
+
+| Pilar | O que existe |
+|---|---|
+| Traces | Requisições HTTP, comandos no PostgreSQL, publicação e consumo das mensagens. **Um único trace vai do `POST /lancamentos` até a atualização do saldo**, atravessando a outbox e o RabbitMQ pelo header `traceparent` |
+| Métricas | HTTP, runtime do .NET e pool do PostgreSQL, mais métricas de negócio: eventos pendentes na outbox e idade do mais antigo, eventos publicados, aplicados, duplicados e rejeitados, atraso entre o lançamento e o saldo, e a origem de cada leitura do consolidado |
+| Logs | Estruturados, com `TraceId` e `SpanId` em cada linha. No console dos containers saem em JSON |
+
+Para ver um lançamento atravessando o sistema, faça um POST, abra o dashboard, vá em **Traces** e clique no trace `POST /lancamentos`.
+
+**Para mandar a outra plataforma**, como Datadog ou Azure Monitor, mude só o collector. Os exemplos já estão comentados em [`infra/otel-collector/config.yaml`](infra/otel-collector/config.yaml). As APIs não mudam ([ADR 0010](docs/adr/0010-observabilidade.md)).
+
 ## Como rodar
 
 Pré-requisito: Docker com Docker Compose.
@@ -106,13 +121,14 @@ Pré-requisito: Docker com Docker Compose.
 docker compose up -d --build
 ```
 
-Esse comando sobe os dois bancos, o RabbitMQ, 2 réplicas de cada API e o nginx na frente delas. Na primeira vez o build das imagens leva alguns minutos.
+Esse comando sobe os dois bancos, o RabbitMQ, 2 réplicas de cada API, o nginx na frente delas e a observabilidade (collector e dashboard). Na primeira vez o build das imagens leva alguns minutos.
 
 | Serviço | Endereço |
 |---|---|
 | Lancamentos.Api (via nginx) | http://localhost:5001 |
 | Consolidado.Api (via nginx) | http://localhost:5002 |
 | Painel do RabbitMQ | http://localhost:15672 (usuário `fluxo`, senha `local-dev`) |
+| Aspire Dashboard (traces, métricas e logs) | http://localhost:18888 |
 | PostgreSQL de lançamentos | localhost:15432 |
 | PostgreSQL do consolidado | localhost:15433 |
 
@@ -297,11 +313,12 @@ Pré-requisitos: .NET 10 SDK e Docker rodando. Os testes de integração usam Te
 dotnet test --solution FluxoCaixa.slnx
 ```
 
-São 97 testes, executados em cerca de 50 segundos:
+São 101 testes, executados em cerca de 50 segundos:
 
 - **Unitários:** validações da entidade `Lancamento`, cálculo do saldo em `SaldoDiario` e montagem do relatório em `RelatorioDoPeriodo` (dias vazios, saldo negativo, acumulado e limite do período).
 - **Integração da Lancamentos.Api:** o POST grava o lançamento e a outbox juntos, a `Idempotency-Key` não duplica (inclusive com 10 requisições simultâneas), a API aceita lançamentos com o RabbitMQ fora, a publicação é ordenada, persistente e confirmada, duas réplicas publicando ao mesmo tempo não duplicam eventos, requisição mal formada devolve 400, além do health check.
 - **Integração da Consolidado.Api:** o consumidor soma corretamente, ignora evento duplicado, não perde atualizações concorrentes, manda mensagem inválida para a DLQ, limita as reentregas antes da DLQ, usa cache e responde o último valor conhecido com o banco fora. O relatório traz saldo inicial, saldo do dia e acumulado corretos, e um lançamento com data passada corrige o acumulado dos dias seguintes.
+- **Observabilidade:** o contexto do trace do POST é gravado na outbox e segue no header da mensagem, o consumidor continua o mesmo trace, e as métricas contam eventos aplicados e duplicados.
 - **Segurança, nos dois serviços:** `401` sem chave, `403` sem permissão, `429` acima do limite do cliente e nas tentativas com chave inválida, `413` para corpo grande, headers de segurança, auditoria do cliente que registrou, `Idempotency-Key` separada por cliente e a API recusando subir com chave em texto no lugar do hash.
 
 ### Carga com k6
@@ -360,6 +377,7 @@ O workflow [ci.yml](.github/workflows/ci.yml) roda build e testes a cada push. D
 | Uma mensagem com problema não trava a fila | DLQ para mensagem inválida. Reentrega limitada pela quorum queue para erros inesperados | `Mensagem_invalida_vai_direto_para_a_dead_letter_queue` e `Erro_inesperado_devolve_para_a_fila_ate_o_limite...` |
 | A consulta continua respondendo com o banco do consolidado fora | Último valor conhecido em memória, com `X-Stale-Data` e `Age` | `Com_o_banco_fora_responde_o_ultimo_valor_conhecido_marcado_como_desatualizado` |
 | Repetir um POST não duplica o lançamento | `Idempotency-Key` com índice único no banco | `Post_repetido_com_mesma_idempotency_key_nao_duplica` e `Posts_simultaneos_com_mesma_idempotency_key...` |
+| Monitoramento: saber que algo deu errado antes do usuário | OpenTelemetry com traces de ponta a ponta, métricas de negócio pensadas para alerta e logs estruturados, por OTLP ([ADR 0010](docs/adr/0010-observabilidade.md)) | `TelemetriaTests`, `Post_guarda_o_contexto_do_trace...` e `Mensagem_publicada_leva_o_trace...` |
 | Segurança: proteger dados e sistemas contra ameaças | Autenticação por cliente, autorização por permissões, rate limiting, limite de corpo, headers OWASP, auditoria e verificação de dependências no CI ([ADR 0009](docs/adr/0009-seguranca.md)). Criptografia pela plataforma na Azure | `ApiKeyTests` e `SegurancaTests` nos dois serviços |
 | Escalabilidade: aguentar mais carga sem degradar | Réplicas sem estado atrás de um balanceador. Publicador único por advisory lock. Consumidores concorrentes. Cache com afinidade por data ([ADR 0008](docs/adr/0008-escalabilidade-horizontal.md)) | `Duas_replicas_publicando_ao_mesmo_tempo...`, o caos com uma réplica parada (0 falhas) e o teste de capacidade: até 10.000 req/s com 0% de perda e p95 abaixo de 25 ms, com 1 e com 2 réplicas ([resultados](docs/carga)) |
 
@@ -371,6 +389,7 @@ Os SLOs, a definição de perda e a tabela completa de modos de falha estão em 
 infra/
   nginx/                balanceador de carga local
   postgres/             regras de acesso que exigem TLS
+  otel-collector/       configuração do OpenTelemetry Collector
 src/
   Contracts/            record do evento LancamentoRegistrado
   Lancamentos.Api/      Domain, Data (EF Core e outbox), Endpoints, Messaging (publicador), Seguranca
@@ -415,7 +434,7 @@ A arquitetura alvo na Azure está em [docs/arquitetura-azure.md](docs/arquitetur
 | Segredos | Azure Key Vault, acessado por workload identity |
 | Cache | Azure Managed Redis, compartilhado entre as réplicas da Consolidado.Api |
 | Autenticação | JWT emitido pelo Microsoft Entra ID, com escopos separados para leitura e escrita |
-| Observabilidade | OpenTelemetry com Azure Monitor, com traces do POST até a atualização do saldo e alertas de atraso e de DLQ |
+| Observabilidade | O mesmo OpenTelemetry Collector enviando para Azure Monitor ou Datadog, com alertas sobre as métricas que as APIs já emitem |
 | Negócio | Estorno de lançamentos e suporte a vários comerciantes |
 | Infraestrutura | Infraestrutura como código com Bicep |
 

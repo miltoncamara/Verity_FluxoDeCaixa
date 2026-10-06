@@ -19,7 +19,7 @@ O objetivo é uma solução que atenda todos os requisitos, que possa ser execut
 | **Migrations aplicadas na inicialização** | O banco fica pronto sem passo manual | Etapa separada no pipeline de deploy |
 | **Cache em memória**, com afinidade por data no nginx | Atende a carga pedida com folga e não adiciona infraestrutura | Azure Managed Redis |
 | **Arquitetura em pastas**, sem projetos por camada, sem interfaces de implementação única, sem repositórios genéricos e sem mediator | Cada serviço é pequeno. Essas abstrações não resolvem nenhum problema real aqui e dificultariam a leitura | Extrair abstrações quando surgir uma necessidade concreta, como uma segunda implementação |
-| **Logs no console** | Suficientes para depurar localmente | OpenTelemetry com traces, métricas e alertas |
+| **Aspire Dashboard como destino da telemetria** | Mostra traces, métricas e logs localmente, sem conta em nenhuma plataforma ([ADR 0010](0010-observabilidade.md)) | O mesmo collector enviando para Azure Monitor ou Datadog, com alertas |
 | **Um único nó de RabbitMQ e de PostgreSQL** | Execução local | Serviços gerenciados com alta disponibilidade ([arquitetura na Azure](../arquitetura-azure.md)) |
 | **nginx como balanceador**, com réplicas na mesma máquina | Mostra a escala horizontal e o failover entre réplicas rodando localmente | Front Door e ingress do AKS, com réplicas em zonas diferentes |
 

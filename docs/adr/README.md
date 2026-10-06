@@ -13,3 +13,4 @@ Cada ADR registra uma decisão, o contexto em que ela foi tomada e as suas conse
 | [0007](0007-simplificacoes-assumidas.md) | Simplificações assumidas |
 | [0008](0008-escalabilidade-horizontal.md) | Escalabilidade horizontal com réplicas, balanceador e publicador único |
 | [0009](0009-seguranca.md) | Segurança das APIs |
+| [0010](0010-observabilidade.md) | Observabilidade com OpenTelemetry |

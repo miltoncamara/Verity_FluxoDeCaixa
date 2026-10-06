@@ -67,6 +67,7 @@ flowchart TB
 | RabbitMQ | Guarda e entrega os eventos | Nada |
 | LancamentoRegistradoConsumer | Aplica cada evento ao saldo do dia, uma única vez. As réplicas consomem a mesma fila em paralelo | RabbitMQ e PostgreSQL do consolidado |
 | Consolidado.Api | Responde o saldo de um dia e o relatório de um período, com saldo do dia e saldo acumulado | PostgreSQL do consolidado. Se ele cair, usa o último valor conhecido em memória |
+| OpenTelemetry Collector | Recebe traces, métricas e logs das duas APIs por OTLP e repassa ao destino. Localmente, ao Aspire Dashboard | Nada. Se ele cair, as APIs continuam funcionando e só a telemetria se perde |
 
 O publicador e o consumidor rodam como `BackgroundService` dentro das APIs. Isso simplifica a entrega e a execução local. Em produção cada um pode virar um processo separado sem mudar o código das classes (ver [ADR 0007](adr/0007-simplificacoes-assumidas.md)).
 
@@ -205,7 +206,7 @@ A arquitetura alvo na Azure, com diagrama, equivalência de cada peça, escalabi
 | PostgreSQL em container | Azure Database for PostgreSQL Flexible Server com HA zone-redundant, réplica de leitura e réplica geográfica com virtual endpoints |
 | Cache em memória | Azure Managed Redis |
 | API Key e variáveis de ambiente | Microsoft Entra ID, Key Vault e workload identity |
-| Logs no console | OpenTelemetry com Azure Monitor e Application Insights |
+| OpenTelemetry Collector e Aspire Dashboard | O mesmo collector enviando para o Azure Monitor e o Application Insights |
 | docker-compose.yml | Bicep |
 
 ### No negócio

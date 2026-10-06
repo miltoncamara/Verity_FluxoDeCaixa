@@ -72,7 +72,7 @@ flowchart TB
 | Cache em memória por réplica | **Azure Managed Redis** | Cache e último valor conhecido compartilhados entre as réplicas, sobrevivendo a restarts. O Azure Cache for Redis está em processo de aposentadoria, por isso a escolha é o Azure Managed Redis |
 | Variáveis de ambiente com padrão `local-dev` | **Azure Key Vault** com **workload identity** | Nenhum segredo em variável de ambiente nem no repositório. O acesso ao PostgreSQL pode usar autenticação do Entra ID, sem senha |
 | API Key no header `X-Api-Key` | **Microsoft Entra ID** com JWT e escopos (`lancamentos.escrita`, `consolidado.leitura`) | Identidade por usuário ou aplicação, com expiração e revogação. O **Azure API Management** pode ficar na frente, se a empresa já o usar para governança de APIs |
-| Logs no console | **Azure Monitor** com **Application Insights**, via OpenTelemetry | Traces de ponta a ponta, métricas e alertas |
+| OpenTelemetry Collector e Aspire Dashboard | **Azure Monitor** com **Application Insights**, recebendo do mesmo collector | Mesma instrumentação, com retenção, alertas e dashboards gerenciados |
 | docker-compose.yml | **Bicep**, aplicado por pipeline | Toda a infraestrutura versionada e reproduzível, inclusive a região secundária |
 
 ## Escalabilidade
@@ -144,17 +144,27 @@ O que já roda localmente está no [ADR 0009](adr/0009-seguranca.md). A tabela m
 
 ## Observabilidade
 
-OpenTelemetry nas duas APIs, exportando para o Application Insights. As métricas que importam para os SLOs ([requisitos não funcionais](requisitos-nao-funcionais.md)):
+Os três pilares já rodam localmente com OpenTelemetry ([ADR 0010](adr/0010-observabilidade.md)). As APIs enviam traces, métricas e logs por OTLP a um OpenTelemetry Collector. Na Azure muda só o destino do collector:
 
-| Métrica | Para que serve | Alerta |
+- **Azure Monitor e Application Insights:** exportador `azuremonitor` do collector, já comentado em `infra/otel-collector/config.yaml`. Outra opção é a distribuição do Azure Monitor para OpenTelemetry direto nas APIs.
+- **Datadog:** exportador `datadog` do collector, também comentado no mesmo arquivo, ou o Datadog Agent recebendo OTLP.
+
+No AKS, o collector roda como DaemonSet ou como deployment central. As APIs continuam apontando para ele pela variável `OTEL_EXPORTER_OTLP_ENDPOINT`.
+
+Alertas sugeridos, todos sobre métricas que as APIs já emitem ou que o Service Bus publica:
+
+| Alerta | Métrica | Condição |
 |---|---|---|
-| Idade do evento mais antigo pendente na outbox | Atraso de publicação | Acima de 1 minuto |
-| Mensagens ativas e idade da mais antiga na assinatura | Atraso de consumo. Detecta um consumidor travado | Acima de 1 minuto |
-| Mensagens na DLQ | Eventos que não puderam ser aplicados | Qualquer mensagem |
-| Taxa de respostas com `X-Stale-Data` | Consolidado servindo valores de fallback | Acima de 1% |
-| Taxa de erro e p95 por endpoint | Comparação direta com os SLOs | Perda acima de 1% ou p95 acima de 200 ms |
+| Publicação atrasada | `outbox.idade_do_evento_mais_antigo` | Acima de 60 s por 2 minutos |
+| Saldo atrasado | `consolidado.atraso_do_evento`, p95 | Acima de 30 s por 5 minutos |
+| Consumidor parado | Mensagens ativas na assinatura do Service Bus, e `consolidado.eventos_aplicados` sem crescer | Fila crescendo por 5 minutos |
+| Mensagem na DLQ | Mensagens na dead letter da assinatura, e `consolidado.mensagens_rejeitadas` | Qualquer mensagem |
+| Banco do consolidado fora | `consolidado.falhas_transitorias` | Qualquer ocorrência em 1 minuto |
+| Consolidado em fallback | `consolidado.leituras` com origem `ultimo_valor_conhecido` ou `indisponivel` | Acima de 1% das leituras |
+| SLO de latência e de perda | `http.server.request.duration`, p95 e taxa de 5xx | p95 acima de 200 ms ou perda acima de 1% |
+| Abuso ou ataque | `aspnetcore.rate_limiting.requests` rejeitadas | Pico fora do padrão |
 
-Um trace distribuído liga o `POST /lancamentos` à publicação e à atualização do saldo, usando o `MessageId` e o contexto de trace nas propriedades da mensagem.
+O trace distribuído liga o `POST /lancamentos` à publicação e à atualização do saldo pelo header `traceparent` da mensagem. Os logs de cada etapa trazem o mesmo `TraceId`.
 
 ## O que muda no código
 

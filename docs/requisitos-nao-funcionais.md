@@ -113,6 +113,6 @@ A tabela mostra o efeito de cada falha nos dois serviços, como a solução se r
 
 - **Banco do consolidado fora por muito tempo.** Uma mensagem pode ficar sem ack por até 30 minutos, que é o `consumer_timeout` padrão do RabbitMQ. Depois disso o broker fecha o canal e a mensagem volta para a fila, contando uma entrega. Uma queda de mais de duas horas e meia (cinco ciclos de 30 minutos) levaria a mensagem para a DLQ. Ela pode ser reprocessada com segurança depois.
 - **Quedas repetidas do consumidor.** Uma queda com mensagens sem ack também conta uma entrega para elas. Cinco quedas seguidas com a mesma mensagem em mãos a mandariam para a DLQ.
-- **Saldo desatualizado sem aviso.** Se o consumidor travar com o banco no ar, a consulta não sabe que o saldo está atrasado. A mitigação é alertar pela idade do evento mais antigo na fila e na outbox.
+- **Saldo desatualizado sem aviso na resposta.** Se o consumidor travar com o banco no ar, a consulta não sabe que o saldo está atrasado. As métricas `outbox.idade_do_evento_mais_antigo` e `consolidado.atraso_do_evento` mostram o atraso, e a plataforma de observabilidade alerta ([ADR 0010](adr/0010-observabilidade.md)).
 - **Cache por instância.** Cada réplica da Consolidado.Api tem o seu cache e o seu último valor conhecido. O nginx compensa isso mandando cada data sempre para a mesma réplica. Se essa réplica cair, a outra começa sem cache para aquela data. Um cache distribuído (Redis) resolveria.
 - **Atraso adicional de até 5 s.** O cache soma até 5 s ao atraso natural da consistência eventual.
