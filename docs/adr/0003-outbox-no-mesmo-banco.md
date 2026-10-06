@@ -34,5 +34,5 @@ Usar o padrão transactional outbox no próprio banco de lançamentos.
 
 - Entrega at-least-once. Se o publicador cair depois do publish e antes de marcar o evento, ele publica de novo. O consumidor idempotente absorve isso.
 - Atraso de até 500 ms entre o commit e a publicação.
-- Com várias réplicas da Lancamentos.Api, dois publicadores podem publicar o mesmo evento. O consumidor idempotente garante o resultado correto. A melhoria seria `SELECT ... FOR UPDATE SKIP LOCKED`.
+- Com várias réplicas da Lancamentos.Api, cada uma roda o seu publicador. Para que só uma publique por vez, sem duplicar e mantendo a ordem, o publicador usa um advisory lock do PostgreSQL ([ADR 0008](0008-escalabilidade-horizontal.md)).
 - A tabela `outbox` cresce até a limpeza. Por isso existem a limpeza periódica e o índice parcial só para os pendentes.

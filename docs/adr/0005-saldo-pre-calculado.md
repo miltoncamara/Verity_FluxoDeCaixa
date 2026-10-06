@@ -30,5 +30,5 @@ O consolidado precisa responder 50 requisições por segundo em dias de pico, co
 **Negativas**
 
 - O saldo pode estar até 5 s atrás do que já foi processado, além do atraso natural da fila.
-- O cache é por instância. Com várias réplicas, um cache distribuído (Redis) seria mais eficiente e manteria o último valor conhecido entre restarts.
+- O cache é por instância. Localmente, o nginx manda cada data sempre para a mesma réplica para compensar isso ([ADR 0008](0008-escalabilidade-horizontal.md)). Em produção, um cache distribuído (Redis) manteria o último valor conhecido entre réplicas e restarts.
 - O header `X-Stale-Data` não é padrão. O header `Warning`, que servia para isso, foi descontinuado pela RFC 9111. O `Age` que o acompanha é padrão.

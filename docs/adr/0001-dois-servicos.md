@@ -23,7 +23,7 @@ Cada serviço é um único projeto .NET, organizado em pastas (Domain, Data, End
 **Positivas**
 
 - Uma falha no consolidado não afeta os lançamentos. O teste de caos comprova isso.
-- Cada serviço escala, é implantado e evolui de forma independente.
+- Cada serviço escala, é implantado e evolui de forma independente ([ADR 0008](0008-escalabilidade-horizontal.md)).
 - Cada banco pode ser dimensionado para o seu padrão de uso. Lançamentos têm muita escrita. O consolidado tem muita leitura por chave.
 
 **Negativas**
