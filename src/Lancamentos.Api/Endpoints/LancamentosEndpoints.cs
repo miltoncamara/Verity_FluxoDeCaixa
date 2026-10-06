@@ -62,7 +62,7 @@ public static class LancamentosEndpoints
 
         Telemetria.LancamentosRegistrados.Add(1, new KeyValuePair<string, object?>("tipo", lancamento.Tipo.ToString()));
         loggerFactory.CreateLogger(nameof(LancamentosEndpoints)).LogInformation(
-            "Lançamento {LancamentoId} de {Data} registrado pelo cliente {Cliente}", lancamento.Id, lancamento.Data, cliente);
+            "Lançamento {LancamentoId} de {Data} registrado pelo cliente {Cliente}", lancamento.Id, lancamento.Data.ToString("yyyy-MM-dd"), cliente);
 
         return Results.Created($"/lancamentos/{lancamento.Id}", LancamentoResponse.De(lancamento));
     }

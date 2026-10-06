@@ -148,7 +148,7 @@ public sealed class LancamentoRegistradoConsumer(
                     {
                         Telemetria.EventosAplicados.Add(1);
                         Telemetria.AtrasoDoEvento.Record((DateTimeOffset.UtcNow - evento.OcorridoEm).TotalSeconds);
-                        logger.LogInformation("Evento {EventoId} aplicado ao saldo de {Data}", evento.EventoId, evento.Data);
+                        logger.LogInformation("Evento {EventoId} aplicado ao saldo de {Data}", evento.EventoId, evento.Data.ToString("yyyy-MM-dd"));
                     }
                     else
                     {
