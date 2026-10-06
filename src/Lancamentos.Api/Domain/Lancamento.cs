@@ -8,6 +8,7 @@ public sealed class Lancamento
 {
     public const int DescricaoTamanhoMaximo = 200;
     public const int IdempotencyKeyTamanhoMaximo = 100;
+    public const int CriadoPorTamanhoMaximo = 100;
     public const decimal ValorMaximo = 9_999_999_999_999_999.99m; // limite da coluna numeric(18,2)
 
     public Guid Id { get; private init; }
@@ -18,6 +19,9 @@ public sealed class Lancamento
     public DateTimeOffset CriadoEm { get; private init; }
     public string? IdempotencyKey { get; private init; }
 
+    /// <summary>Cliente da API que registrou o lançamento, para auditoria.</summary>
+    public string CriadoPor { get; private init; } = "";
+
     // Usado pelo EF Core para materializar a entidade.
     private Lancamento() { }
 
@@ -25,8 +29,11 @@ public sealed class Lancamento
     /// Cria um lançamento válido ou devolve os erros de validação por campo.
     /// </summary>
     public static (Lancamento? Lancamento, Dictionary<string, string> Erros) Criar(
-        DateOnly? data, string? tipo, decimal? valor, string? descricao, string? idempotencyKey = null)
+        DateOnly? data, string? tipo, decimal? valor, string? descricao, string criadoPor, string? idempotencyKey = null)
     {
+        // Quem registrou vem da autenticação, não do cliente. Se faltar, é erro de programação.
+        ArgumentException.ThrowIfNullOrWhiteSpace(criadoPor);
+
         var erros = new Dictionary<string, string>();
 
         if (data is null)
@@ -62,7 +69,8 @@ public sealed class Lancamento
             Valor = valor!.Value,
             Descricao = descricao!.Trim(),
             CriadoEm = AgoraEmMicrossegundos(),
-            IdempotencyKey = idempotencyKey
+            IdempotencyKey = idempotencyKey,
+            CriadoPor = criadoPor
         };
         return (lancamento, erros);
     }

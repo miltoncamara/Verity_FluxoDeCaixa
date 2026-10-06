@@ -12,24 +12,22 @@ namespace Lancamentos.Tests.Integracao;
 /// </summary>
 public sealed class LancamentosApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
 {
-    public const string ChaveDeTeste = "chave-de-teste";
-
     private readonly PostgreSqlContainer _postgres = new PostgreSqlBuilder("postgres:17-alpine").Build();
 
     public async ValueTask InitializeAsync() => await _postgres.StartAsync();
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
-        builder.UseSetting("Seguranca:ApiKey", ChaveDeTeste);
+        ClientesDeTeste.Configurar(builder);
         builder.UseSetting("ConnectionStrings:Lancamentos", _postgres.GetConnectionString());
         builder.UseSetting("RabbitMQ:Host", "localhost");
         builder.UseSetting("RabbitMQ:Port", "1");
     }
 
-    public HttpClient CriarClienteAutenticado()
+    public HttpClient CriarClienteAutenticado(string chave = ClientesDeTeste.ChaveCompleta)
     {
         var client = CreateClient();
-        client.DefaultRequestHeaders.Add("X-Api-Key", ChaveDeTeste);
+        client.DefaultRequestHeaders.Add("X-Api-Key", chave);
         return client;
     }
 

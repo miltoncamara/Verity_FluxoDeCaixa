@@ -1,6 +1,7 @@
 using System.Globalization;
 using Consolidado.Api.Data;
 using Consolidado.Api.Domain;
+using Consolidado.Api.Seguranca;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
@@ -23,8 +24,8 @@ public static class ConsolidadoEndpoints
 
     public static void MapConsolidadoEndpoints(this WebApplication app)
     {
-        app.MapGet("/consolidado/{data}", ObterSaldoDoDia);
-        app.MapGet("/consolidado", ObterRelatorioDoPeriodo);
+        app.MapGet("/consolidado/{data}", ObterSaldoDoDia).RequireAuthorization(Permissoes.ConsolidadoLeitura);
+        app.MapGet("/consolidado", ObterRelatorioDoPeriodo).RequireAuthorization(Permissoes.ConsolidadoLeitura);
     }
 
     private static async Task<IResult> ObterSaldoDoDia(

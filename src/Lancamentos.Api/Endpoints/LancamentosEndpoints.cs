@@ -1,6 +1,8 @@
 using System.Globalization;
+using System.Security.Claims;
 using Lancamentos.Api.Data;
 using Lancamentos.Api.Domain;
+using Lancamentos.Api.Seguranca;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
@@ -11,25 +13,29 @@ public static class LancamentosEndpoints
 {
     public static void MapLancamentosEndpoints(this WebApplication app)
     {
-        app.MapPost("/lancamentos", RegistrarLancamento);
-        app.MapGet("/lancamentos", ListarPorData);
-        app.MapGet("/lancamentos/{id:guid}", ObterPorId);
+        app.MapPost("/lancamentos", RegistrarLancamento).RequireAuthorization(Permissoes.LancamentosEscrita);
+        app.MapGet("/lancamentos", ListarPorData).RequireAuthorization(Permissoes.LancamentosLeitura);
+        app.MapGet("/lancamentos/{id:guid}", ObterPorId).RequireAuthorization(Permissoes.LancamentosLeitura);
     }
 
     private static async Task<IResult> RegistrarLancamento(
         NovoLancamentoRequest request,
         [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        ClaimsPrincipal usuario,
         LancamentosDbContext db,
         CancellationToken ct)
     {
-        var (lancamento, erros) = Lancamento.Criar(request.Data, request.Tipo, request.Valor, request.Descricao, idempotencyKey);
+        // O cliente vem da API Key autenticada, nunca do corpo da requisição.
+        var cliente = usuario.Identity!.Name!;
+
+        var (lancamento, erros) = Lancamento.Criar(request.Data, request.Tipo, request.Valor, request.Descricao, cliente, idempotencyKey);
         if (lancamento is null)
             return Results.ValidationProblem(erros.ToDictionary(e => e.Key, e => new[] { e.Value }));
 
         // Requisição repetida com a mesma chave: devolve o lançamento original sem duplicar.
         if (idempotencyKey is not null)
         {
-            var existente = await BuscarPorIdempotencyKey(db, idempotencyKey, ct);
+            var existente = await BuscarPorIdempotencyKey(db, cliente, idempotencyKey, ct);
             if (existente is not null)
                 return Results.Ok(LancamentoResponse.De(existente));
         }
@@ -48,7 +54,7 @@ public static class LancamentosEndpoints
         {
             // Duas requisições simultâneas com a mesma chave: o índice único barrou a segunda.
             db.ChangeTracker.Clear();
-            var original = await BuscarPorIdempotencyKey(db, idempotencyKey, ct);
+            var original = await BuscarPorIdempotencyKey(db, cliente, idempotencyKey, ct);
             return Results.Ok(LancamentoResponse.De(original!));
         }
 
@@ -76,6 +82,6 @@ public static class LancamentosEndpoints
         return lancamento is null ? Results.NotFound() : Results.Ok(LancamentoResponse.De(lancamento));
     }
 
-    private static Task<Lancamento?> BuscarPorIdempotencyKey(LancamentosDbContext db, string idempotencyKey, CancellationToken ct) =>
-        db.Lancamentos.AsNoTracking().FirstOrDefaultAsync(l => l.IdempotencyKey == idempotencyKey, ct);
+    private static Task<Lancamento?> BuscarPorIdempotencyKey(LancamentosDbContext db, string cliente, string idempotencyKey, CancellationToken ct) =>
+        db.Lancamentos.AsNoTracking().FirstOrDefaultAsync(l => l.CriadoPor == cliente && l.IdempotencyKey == idempotencyKey, ct);
 }
