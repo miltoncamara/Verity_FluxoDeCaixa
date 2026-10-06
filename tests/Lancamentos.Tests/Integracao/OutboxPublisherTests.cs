@@ -66,7 +66,7 @@ public class OutboxPublisherTests(LancamentosComRabbitMqFactory factory) : IAsyn
     }
 
     [Fact]
-    public async Task Duas_replicas_publicando_ao_mesmo_tempo_nao_duplicam_nem_desordenam_eventos()
+    public async Task Duas_replicas_publicando_ao_mesmo_tempo_nao_duplicam_nem_perdem_eventos()
     {
         // Simula uma segunda réplica da Lancamentos.Api: outro OutboxPublisher lendo o mesmo banco.
         var segundaReplica = new OutboxPublisher(
@@ -91,14 +91,13 @@ public class OutboxPublisherTests(LancamentosComRabbitMqFactory factory) : IAsyn
             while (await _canal.BasicGetAsync(fila, autoAck: true, Ct) is { } extra)
                 recebidas.Add((extra.BasicProperties, JsonSerializer.Deserialize<LancamentoRegistrado>(extra.Body.Span, JsonSerializerOptions.Web)!));
 
+            // Cada evento chega exatamente uma vez: nenhum duplicado, nenhum faltando.
+            // A ordem não é verificada aqui. Com POSTs em paralelo, um lançamento criado antes pode terminar
+            // o commit depois de outro, então a ordem por horário de criação não é estrita. A ordem com
+            // gravações sequenciais é verificada em Eventos_sao_publicados_na_ordem_em_que_foram_criados.
             Assert.Equal(quantidade, recebidas.Count);
             Assert.Equal(quantidade, recebidas.Select(r => r.Evento.EventoId).Distinct().Count());
-
-            await using var db = factory.CriarDbContext();
-            var ordemDeCriacao = (await db.Outbox.AsNoTracking().OrderBy(o => o.CriadoEm).ThenBy(o => o.Id).Select(o => o.Id).ToListAsync(Ct))
-                .Where(id => recebidas.Any(r => r.Evento.EventoId == id))
-                .ToList();
-            Assert.Equal(ordemDeCriacao, recebidas.Select(r => r.Evento.EventoId));
+            Assert.All(recebidas, r => Assert.Equal(dia, r.Evento.Data));
         }
         finally
         {

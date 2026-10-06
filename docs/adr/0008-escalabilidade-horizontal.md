@@ -9,7 +9,7 @@ A arquitetura precisa lidar com o aumento da carga sem degradar o desempenho. O 
 
 As APIs já não guardam estado entre requisições, e o consumidor já tolera concorrência ([ADR 0004](0004-consumidor-idempotente.md)). Faltavam três coisas:
 
-- **O publicador da outbox não estava pronto para várias réplicas.** Cada réplica roda o seu publicador e todas leem os mesmos eventos pendentes. Um teste com dois publicadores ao mesmo tempo mostrou 200 mensagens para 100 eventos: cada evento foi publicado duas vezes, e a ordem de publicação se perdia.
+- **O publicador da outbox não estava pronto para várias réplicas.** Cada réplica roda o seu publicador e todas leem os mesmos eventos pendentes. Um teste com dois publicadores ao mesmo tempo mostrou 200 mensagens para 100 eventos: cada evento foi publicado duas vezes.
 - **Não havia balanceador de carga.** O compose expunha uma única instância de cada API.
 - **O cache em memória perde eficiência com várias réplicas,** porque cada réplica guarda o seu.
 
@@ -17,7 +17,7 @@ As APIs já não guardam estado entre requisições, e o consumidor já tolera c
 
 **Publicador único com advisory lock.** A cada ciclo, o publicador abre uma transação numa conexão própria e chama `pg_try_advisory_xact_lock`. Só a réplica que consegue o lock publica naquele ciclo. As outras ficam de reserva e assumem no ciclo seguinte se a ativa cair, porque o lock é liberado sozinho quando a transação ou a conexão termina.
 
-- Escolhemos o lock em vez de `SELECT ... FOR UPDATE SKIP LOCKED`, porque com o lock a ordem de publicação continua global. Com `SKIP LOCKED`, várias réplicas publicariam lotes diferentes ao mesmo tempo, fora de ordem.
+- Escolhemos o lock em vez de `SELECT ... FOR UPDATE SKIP LOCKED`, porque com o lock existe um único publicador ativo e a publicação segue a ordem da outbox. Com `SKIP LOCKED`, várias réplicas publicariam lotes diferentes ao mesmo tempo, intercalados. A ordem é a do horário de criação entre os eventos já gravados. Com lançamentos gravados em paralelo, um criado antes pode terminar o commit depois de outro e sair depois dele. O consolidado não depende da ordem, porque somar é comutativo.
 - O lock é preso à transação, e não à sessão, para funcionar também atrás de um pool de conexões em modo de transação, como o PgBouncer.
 - As marcações de publicado continuam sendo gravadas uma a uma, fora dessa transação. Uma queda no meio do lote não desfaz o que já foi publicado.
 
@@ -37,7 +37,7 @@ As APIs já não guardam estado entre requisições, e o consumidor já tolera c
 **Positivas**
 
 - A escala horizontal funciona e é testada localmente: o teste de caos para uma réplica da Lancamentos.Api no meio do envio e nenhum POST falha.
-- O publicador não duplica eventos nem perde a ordem com qualquer número de réplicas, e tem failover automático.
+- O publicador não duplica nem perde eventos com qualquer número de réplicas, e tem failover automático.
 - O teste de capacidade mede a solução com 1 e com 2 réplicas ([docs/carga](../carga)).
 - Na Azure o desenho se mantém: o nginx vira o ingress do AKS e o Front Door, e o hash por URL pode ser trocado por um cache distribuído ([arquitetura na Azure](../arquitetura-azure.md)).
 
