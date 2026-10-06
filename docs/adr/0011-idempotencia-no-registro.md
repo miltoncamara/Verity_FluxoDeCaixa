@@ -9,7 +9,7 @@ Um POST pode falhar sem que o cliente saiba se o lançamento foi gravado. Isso a
 
 Uma alternativa seria o backend detectar a repetição sozinho, por um hash do conteúdo do pedido. Isso não funciona no fluxo de caixa: duas vendas iguais no mesmo dia, como dois cafés de R$ 5,00, têm exatamente o mesmo conteúdo e são duas vendas legítimas. Com o hash como chave, a segunda seria descartada e o caixa ficaria errado.
 
-Também foi medido que, com o banco de lançamentos fora, o POST ficava cerca de 1 minuto preso nas retentativas do EF Core e terminava com `504` do nginx.
+Há também o caso do banco fora. As retentativas do EF Core seguram o pedido por cerca de 1 minuto antes de desistir, e o nginx responde `504` antes disso. Com vários pedidos chegando, eles se acumulam presos na API.
 
 ## Decisão
 

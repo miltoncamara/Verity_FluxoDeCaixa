@@ -31,7 +31,7 @@ O tratamento de erros separa três casos:
 | Banco do consolidado fora | Mantém a mensagem sem ack e tenta de novo a cada 5 s. Não conta como tentativa |
 | Erro inesperado | `basic.reject` com requeue. A quorum queue conta as entregas e, depois de 5, move a mensagem para a DLQ |
 
-Foi usado `basic.reject` e não `basic.nack` porque, desde o RabbitMQ 4.3, a quorum queue só conta para o `x-delivery-limit` as devoluções feitas com `reject`. Um teste de integração mostrou que, com `nack`, a mensagem voltava para a fila indefinidamente.
+O consumidor usa `basic.reject` e não `basic.nack` porque, desde o RabbitMQ 4.3, a quorum queue só conta para o `x-delivery-limit` as devoluções feitas com `reject`. Com `nack`, uma mensagem com erro voltaria para a fila sem parar e nunca chegaria à DLQ. Um teste de integração confere que ela chega à DLQ depois do limite.
 
 ## Consequências
 

@@ -7,7 +7,9 @@
 
 O sistema precisa proteger os dados e os serviços contra ameaças, com autenticação, autorização, criptografia e proteção contra ataques.
 
-A primeira versão tinha uma única API Key compartilhada. Ela autenticava, mas não autorizava: quem tinha a chave podia fazer tudo. Não havia limite de requisições, limite de tamanho do corpo, headers de segurança nem registro de quem fez cada lançamento.
+Uma API Key única e compartilhada autentica, mas não autoriza: quem tem a chave pode fazer tudo. Um ponto de venda, que só precisa registrar lançamentos, teria acesso aos relatórios. Um sistema de relatórios poderia registrar lançamentos.
+
+Além do acesso, a API precisa se proteger de abuso e de tentativas de adivinhar chaves, recusar pedidos grandes demais e registrar quem fez cada lançamento.
 
 ## Decisão
 
@@ -43,7 +45,7 @@ Como as regras ficam nas policies, trocar a API Key por JWT do Microsoft Entra I
 - O nginx não revela a sua versão.
 - Datas aceitas só no formato ISO, e requisição mal formada responde `400` em vez de `500`.
 
-**Auditoria.** Cada lançamento grava o cliente que o registrou (`criado_por`), vindo da autenticação e nunca do corpo da requisição. A `Idempotency-Key` passou a ser única por cliente. Dois clientes podem usar a mesma chave sem conflito, e um nunca recebe o lançamento do outro.
+**Auditoria.** Cada lançamento grava o cliente que o registrou (`criado_por`), vindo da autenticação e nunca do corpo da requisição. A `Idempotency-Key` é única por cliente. Dois clientes podem usar a mesma chave sem conflito, e um nunca recebe o lançamento do outro.
 
 **Segurança no CI.** Dependabot para pacotes NuGet, imagens Docker e actions. CodeQL para análise estática do C#. Um passo que falha o build se algum pacote tiver vulnerabilidade conhecida.
 

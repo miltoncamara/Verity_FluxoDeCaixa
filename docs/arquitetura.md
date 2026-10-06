@@ -173,7 +173,7 @@ O consumidor trata os erros de três formas diferentes:
 | Banco do consolidado fora | A mensagem fica com o consumidor, sem ack, e o processamento é repetido a cada 5 s | O problema não é da mensagem. Ela não deve gastar tentativas nem ir para a DLQ |
 | Erro inesperado (por exemplo, um bug ou uma tabela ausente) | `basic.reject` com requeue. Depois de 5 entregas, o RabbitMQ move para a DLQ | Dá chance de recuperação sem travar a fila para sempre |
 
-> Desde o RabbitMQ 4.3, a quorum queue só conta para o `x-delivery-limit` as devoluções feitas com `basic.reject`. Uma devolução com `basic.nack` não conta. Por isso o consumidor usa `reject` com requeue. Um teste de integração encontrou esse comportamento: com `nack`, uma mensagem com erro voltou para a fila 3.616 vezes em 30 segundos.
+> Desde o RabbitMQ 4.3, a quorum queue só conta para o `x-delivery-limit` as devoluções feitas com `basic.reject`. Uma devolução com `basic.nack` não conta. Por isso o consumidor usa `reject` com requeue. Com `nack`, uma mensagem com erro voltaria para a fila sem parar, centenas de vezes por segundo, e nunca chegaria à DLQ.
 
 ## Modelo de dados
 

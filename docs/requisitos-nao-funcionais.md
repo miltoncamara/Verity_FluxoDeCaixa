@@ -49,7 +49,7 @@ As decisões estão no [ADR 0008](adr/0008-escalabilidade-horizontal.md). A esca
 
 | Teste | Resultado |
 |---|---|
-| Duas réplicas publicando a outbox ao mesmo tempo | 100 eventos, 100 mensagens, sem duplicata e sem falta. Sem o lock, eram 200 mensagens |
+| Duas réplicas publicando a outbox ao mesmo tempo | 100 eventos, 100 mensagens, sem duplicata e sem falta. Sem o lock, cada evento seria publicado uma vez por réplica |
 | Uma réplica da Lancamentos.Api parada no meio do teste de caos | 442 POSTs, 0 falhas. O nginx mandou tudo para a outra réplica |
 | Capacidade com 1 réplica da Consolidado.Api | Até 10.000 req/s dentro do SLO: 0% de perda e p95 de 9,7 ms ([resultado](carga/capacidade-1-replica.md)) |
 | Capacidade com 2 réplicas da Consolidado.Api | Até 10.000 req/s dentro do SLO: 0% de perda e p95 de 23,4 ms ([resultado](carga/capacidade-2-replicas.md)) |
@@ -59,7 +59,7 @@ As decisões estão no [ADR 0008](adr/0008-escalabilidade-horizontal.md). A esca
 - **Uma única réplica aguenta 200 vezes o requisito.** O requisito é 50 req/s, e uma réplica atende 10.000 req/s com p95 abaixo de 10 ms. Numa sondagem extra, a saturação começou entre 12.000 e 16.000 req/s.
 - **Localmente, a segunda réplica não aumenta a capacidade.** O k6, o nginx, as réplicas e o PostgreSQL dividem a mesma CPU. Com duas réplicas, elas disputam o mesmo processador, e a 10.000 req/s o p95 até sobe. O teto medido é o da máquina, e não o da arquitetura.
 - **O ganho real de capacidade aparece com réplicas em máquinas diferentes,** como nos nós do AKS. O que o teste local comprova é que a escala horizontal funciona corretamente: o balanceamento distribui a carga, a queda de uma réplica não gera erro, o publicador não duplica eventos e os consumidores concorrentes mantêm o saldo exato.
-- Antes de cada medição, 15 s de aquecimento ficam fora do relatório. Sem isso, o primeiro degrau media a partida a frio da réplica recém-criada (JIT e pool de conexões vazios), e não a capacidade.
+- Antes de cada medição, 15 s de aquecimento ficam fora do relatório. Sem isso, o primeiro degrau mediria a partida a frio da réplica recém-criada (JIT e pool de conexões vazios), e não a capacidade.
 
 ### Gargalos conhecidos
 

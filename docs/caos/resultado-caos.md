@@ -41,8 +41,8 @@ PASSOU: nenhum lançamento falhou e o consolidado convergiu para o valor correto
 - Depois da volta dos serviços, o saldo consolidado ficou igual, centavo por centavo, à soma dos lançamentos confirmados.
 - A dead letter queue ficou vazia. Nenhuma mensagem foi descartada.
 
-## Um problema que este teste encontrou
+## Uma configuração de que este teste depende
 
-Na primeira execução com réplicas, 2 POSTs ficaram sem resposta. Quando uma réplica para, o seu IP some da rede, mas o nginx ainda o guarda por alguns segundos. Uma conexão para um IP que não existe não é recusada. Ela fica pendurada até o timeout de conexão, que por padrão é de 60 s.
+Quando uma réplica para, o IP dela deixa de responder, mas o nginx ainda o guarda por alguns segundos. Uma conexão para um IP que não existe não é recusada: ela fica esperando até o timeout de conexão, que por padrão é de 60 s. Os POSTs que caíssem na réplica parada ficariam sem resposta.
 
-A correção foi configurar `proxy_connect_timeout 1s` no nginx. Na mesma rede uma conexão leva menos de 1 ms, então depois de 1 s o nginx desiste e tenta a outra réplica. Depois disso o teste passou em todas as execuções.
+Por isso o nginx usa `proxy_connect_timeout 1s`. Na mesma rede uma conexão leva menos de 1 ms, então depois de 1 s o nginx desiste e tenta a outra réplica ([ADR 0008](../adr/0008-escalabilidade-horizontal.md)).
