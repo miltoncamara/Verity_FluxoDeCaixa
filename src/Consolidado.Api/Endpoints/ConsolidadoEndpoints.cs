@@ -1,5 +1,7 @@
+using System.Globalization;
 using Consolidado.Api.Data;
 using Consolidado.Api.Domain;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
 
@@ -22,38 +24,99 @@ public static class ConsolidadoEndpoints
     public static void MapConsolidadoEndpoints(this WebApplication app)
     {
         app.MapGet("/consolidado/{data}", ObterSaldoDoDia);
+        app.MapGet("/consolidado", ObterRelatorioDoPeriodo);
     }
 
     private static async Task<IResult> ObterSaldoDoDia(
-        DateOnly data,
+        string data,
         ConsolidadoDbContext db,
         IMemoryCache cache,
         HttpResponse response,
         ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
-        var chave = $"saldo:{data:yyyy-MM-dd}";
-        cache.TryGetValue(chave, out SaldoEmCache? emCache);
+        if (!TentarLerData(data, out var dia))
+            return ErroDeData("data");
+
+        return await LerComCacheAsync($"saldo:{dia:yyyy-MM-dd}", async limite =>
+        {
+            // Leitura por chave na tabela pré-calculada. Um dia sem lançamentos tem saldo zero.
+            var saldo = await db.SaldosDiarios.AsNoTracking().FirstOrDefaultAsync(s => s.Data == dia, limite)
+                ?? SaldoDiario.Vazio(dia);
+            return ConsolidadoResponse.De(saldo);
+        }, cache, response, loggerFactory, ct);
+    }
+
+    private static async Task<IResult> ObterRelatorioDoPeriodo(
+        [FromQuery(Name = "inicio")] string? textoInicio,
+        [FromQuery(Name = "fim")] string? textoFim,
+        ConsolidadoDbContext db,
+        IMemoryCache cache,
+        HttpResponse response,
+        ILoggerFactory loggerFactory,
+        CancellationToken ct)
+    {
+        if (!TentarLerData(textoInicio, out var inicio))
+            return ErroDeData("inicio");
+        if (!TentarLerData(textoFim, out var fim))
+            return ErroDeData("fim");
+        if (RelatorioDoPeriodo.ValidarPeriodo(inicio, fim) is { } erro)
+            return Results.ValidationProblem(new Dictionary<string, string[]> { ["periodo"] = [erro] });
+
+        return await LerComCacheAsync($"relatorio:{inicio:yyyy-MM-dd}:{fim:yyyy-MM-dd}", async limite =>
+        {
+            // As duas consultas leem a tabela saldo_diario, que tem uma linha por dia.
+            // Nunca é feita soma sobre lançamentos.
+            var saldoInicial = await db.SaldosDiarios
+                .Where(s => s.Data < inicio)
+                .SumAsync(s => s.TotalCreditos - s.TotalDebitos, limite);
+
+            var saldosDoPeriodo = await db.SaldosDiarios.AsNoTracking()
+                .Where(s => s.Data >= inicio && s.Data <= fim)
+                .ToListAsync(limite);
+
+            return RelatorioDoPeriodo.Montar(inicio, fim, saldoInicial, saldosDoPeriodo);
+        }, cache, response, loggerFactory, ct);
+    }
+
+    // Aceita somente yyyy-MM-dd. Sem isso o ASP.NET aceitaria "07-10-2026" e leria como 10 de julho.
+    private static bool TentarLerData(string? texto, out DateOnly data) =>
+        DateOnly.TryParseExact(texto, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out data);
+
+    private static IResult ErroDeData(string campo) =>
+        Results.ValidationProblem(new Dictionary<string, string[]> { [campo] = ["Informe a data no formato yyyy-MM-dd."] });
+
+    /// <summary>
+    /// Serve a leitura da memória por até TempoDeCache. Depois disso relê do banco, com limite de tempo.
+    /// Se o banco falhar, responde o último valor conhecido marcado como desatualizado, ou 503 se não houver nenhum.
+    /// </summary>
+    private static async Task<IResult> LerComCacheAsync<T>(
+        string chave,
+        Func<CancellationToken, Task<T>> lerDoBanco,
+        IMemoryCache cache,
+        HttpResponse response,
+        ILoggerFactory loggerFactory,
+        CancellationToken ct)
+    {
+        cache.TryGetValue(chave, out LeituraEmCache<T>? emCache);
 
         if (emCache is not null && DateTimeOffset.UtcNow - emCache.LidoEm < TempoDeCache)
-            return Results.Ok(ConsolidadoResponse.De(emCache.Saldo));
+            return Results.Ok(emCache.Valor);
 
         try
         {
             using var limite = CancellationTokenSource.CreateLinkedTokenSource(ct);
             limite.CancelAfter(TempoMaximoDeLeitura);
 
-            // Leitura por chave na tabela pré-calculada. Um dia sem lançamentos tem saldo zero.
-            var saldo = await db.SaldosDiarios.AsNoTracking().FirstOrDefaultAsync(s => s.Data == data, limite.Token)
-                ?? SaldoDiario.Vazio(data);
+            var valor = await lerDoBanco(limite.Token);
 
-            cache.Set(chave, new SaldoEmCache(saldo, DateTimeOffset.UtcNow), TempoDoUltimoValorConhecido);
-            return Results.Ok(ConsolidadoResponse.De(saldo));
+            cache.Set(chave, new LeituraEmCache<T>(valor, DateTimeOffset.UtcNow), TempoDoUltimoValorConhecido);
+            return Results.Ok(valor);
         }
         catch (Exception ex) when (!ct.IsCancellationRequested)
         {
             loggerFactory.CreateLogger(nameof(ConsolidadoEndpoints))
-                .LogWarning("Falha ao ler o saldo de {Data} no banco: {Erro}", data, ex.Message);
+                .LogWarning("Falha ao ler {Chave} no banco: {Erro}", chave, ex.Message);
 
             if (emCache is null)
             {
@@ -65,7 +128,7 @@ public static class ConsolidadoEndpoints
             // Banco fora, mas existe um valor conhecido: responde com ele e avisa que pode estar desatualizado.
             response.Headers[HeaderDadoDesatualizado] = "true";
             response.Headers.Age = ((int)(DateTimeOffset.UtcNow - emCache.LidoEm).TotalSeconds).ToString();
-            return Results.Ok(ConsolidadoResponse.De(emCache.Saldo));
+            return Results.Ok(emCache.Valor);
         }
     }
 }

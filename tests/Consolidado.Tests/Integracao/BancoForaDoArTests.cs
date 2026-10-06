@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Json;
+using Consolidado.Api.Domain;
 using Consolidado.Api.Endpoints;
 using Microsoft.EntityFrameworkCore;
 
@@ -11,6 +12,8 @@ public class BancoForaDoArTests(ConsolidadoApiFactory factory)
 {
     private readonly HttpClient _client = factory.CriarClienteAutenticado();
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
+
+    private const string RelatorioConhecido = "/consolidado?inicio=2026-10-01&fim=2026-10-05";
 
     [Fact]
     public async Task Com_o_banco_fora_responde_o_ultimo_valor_conhecido_marcado_como_desatualizado()
@@ -27,6 +30,8 @@ public class BancoForaDoArTests(ConsolidadoApiFactory factory)
         // Primeira leitura com o banco no ar: o valor fica guardado em memória.
         var antes = await _client.GetFromJsonAsync<ConsolidadoResponse>($"/consolidado/{diaConhecido:yyyy-MM-dd}", Ct);
         Assert.Equal(180m, antes!.Saldo);
+        var relatorioAntes = await _client.GetFromJsonAsync<RelatorioDoPeriodo>(RelatorioConhecido, Ct);
+        Assert.Equal(180m, relatorioAntes!.SaldoFinal);
 
         await factory.PararBancoAsync();
         await Task.Delay(ConsolidadoEndpoints.TempoDeCache + TimeSpan.FromMilliseconds(500), Ct);
@@ -41,6 +46,16 @@ public class BancoForaDoArTests(ConsolidadoApiFactory factory)
         Assert.NotNull(resposta.Headers.Age);
         Assert.Equal(180m, (await resposta.Content.ReadFromJsonAsync<ConsolidadoResponse>(Ct))!.Saldo);
         Assert.True(cronometro.Elapsed < TimeSpan.FromSeconds(4), $"Fallback demorou {cronometro.Elapsed}");
+
+        // O relatório já lido também responde o último valor conhecido.
+        var relatorio = await _client.GetAsync(RelatorioConhecido, Ct);
+        Assert.Equal(HttpStatusCode.OK, relatorio.StatusCode);
+        Assert.Equal("true", relatorio.Headers.GetValues(ConsolidadoEndpoints.HeaderDadoDesatualizado).Single());
+        Assert.Equal(180m, (await relatorio.Content.ReadFromJsonAsync<RelatorioDoPeriodo>(Ct))!.SaldoFinal);
+
+        // Um período nunca lido não tem o que responder.
+        var relatorioSemCache = await _client.GetAsync("/consolidado?inicio=2026-09-01&fim=2026-09-30", Ct);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, relatorioSemCache.StatusCode);
 
         // Dia nunca lido: não há o que responder, então 503 com Retry-After.
         var semCache = await _client.GetAsync($"/consolidado/{diaDesconhecido:yyyy-MM-dd}", Ct);
