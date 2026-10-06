@@ -137,6 +137,13 @@ for _ in $(seq 1 $((TEMPO_MAXIMO_CONVERGENCIA / 2))); do
   sleep 2
 done
 
+# Toda conexão das APIs com os bancos deve estar criptografada (o pg_hba recusa conexão sem TLS).
+conexoes_tls() {
+  docker compose exec -T "$1" psql -U postgres -tAc     "select count(*) filter (where s.ssl) || '/' || count(*) from pg_stat_ssl s join pg_stat_activity a using (pid) where a.client_addr is not null"
+}
+TLS_LANCAMENTOS=$(conexoes_tls postgres-lancamentos)
+TLS_CONSOLIDADO=$(conexoes_tls postgres-consolidado)
+
 DLQ=$(curl -s -u "$RABBITMQ_USUARIO" "http://localhost:15672/api/queues/%2F/consolidado.lancamentos.dlq" |
   grep -o '"messages":[0-9]*' | head -1 | cut -d: -f2 || true)
 
@@ -150,6 +157,8 @@ echo "Eventos pendentes durante a queda: $PENDENTES"
 echo "Saldo esperado (centavos):         $ESPERADO"
 echo "Saldo consolidado (centavos):      ${SALDO:-sem resposta}"
 echo "Mensagens na dead letter queue:    ${DLQ:-desconhecido}"
+echo "Conexões com TLS (lançamentos):    $TLS_LANCAMENTOS"
+echo "Conexões com TLS (consolidado):    $TLS_CONSOLIDADO"
 echo "============================================================"
 
 RESULTADO=0
@@ -166,5 +175,11 @@ if [ "${SALDO:-x}" != "$ESPERADO" ]; then
   echo "FALHOU: o consolidado não convergiu para o saldo esperado."
   RESULTADO=1
 fi
+for tls in "$TLS_LANCAMENTOS" "$TLS_CONSOLIDADO"; do
+  if [ "${tls%/*}" != "${tls#*/}" ] || [ "${tls#*/}" = "0" ]; then
+    echo "FALHOU: há conexão com o banco sem TLS ($tls)."
+    RESULTADO=1
+  fi
+done
 [ "$RESULTADO" -eq 0 ] && echo "PASSOU: nenhum lançamento falhou e o consolidado convergiu para o valor correto."
 exit "$RESULTADO"

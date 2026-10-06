@@ -6,30 +6,47 @@
 name: fluxo-caixa
 
 # Clientes da API, usados pelas duas APIs. Cada um tem a própria chave, permissões e limite por segundo.
-# O limite vale por réplica. As chaves têm padrão local-dev só para rodar localmente. Veja .env.example.
+# O limite vale por réplica. As APIs recebem só o hash SHA-256 de cada chave, nunca a chave em si.
+# Os hashes padrão correspondem a local-dev-key, local-pdv-key e local-bi-key. Veja .env.example.
+# Comando dos dois PostgreSQL: TLS ligado e regras de acesso que recusam conexão pela rede sem TLS.
+# O certificado é o de teste da imagem oficial: serve para criptografar o tráfego local. Em produção,
+# o certificado é o do serviço gerenciado e o cliente valida o servidor (SSL Mode=VerifyFull).
+x-postgres-com-tls: &postgres-com-tls
+  - postgres
+  - -c
+  - ssl=on
+  - -c
+  - ssl_cert_file=/etc/ssl/certs/ssl-cert-snakeoil.pem
+  - -c
+  - ssl_key_file=/etc/ssl/private/ssl-cert-snakeoil.key
+  - -c
+  - hba_file=/etc/postgresql/pg_hba.conf
+
 x-clientes-da-api: &clientes-da-api
   # admin: tudo liberado, com limite alto para os testes de carga e de caos
   Seguranca__Clientes__0__Nome: admin
-  Seguranca__Clientes__0__Chave: ${API_KEY:-local-dev-key}
+  Seguranca__Clientes__0__ChaveSha256: ${API_KEY_SHA256:-ed5a18fb8f807f996d649e379d3f35f39c543a91bdbf88c492f2ebd10d4df86c}
   Seguranca__Clientes__0__Permissoes__0: lancamentos.escrita
   Seguranca__Clientes__0__Permissoes__1: lancamentos.leitura
   Seguranca__Clientes__0__Permissoes__2: consolidado.leitura
   Seguranca__Clientes__0__LimitePorSegundo: 20000
   # pdv: um ponto de venda, que só registra lançamentos
   Seguranca__Clientes__1__Nome: pdv
-  Seguranca__Clientes__1__Chave: ${API_KEY_PDV:-local-pdv-key}
+  Seguranca__Clientes__1__ChaveSha256: ${API_KEY_PDV_SHA256:-cf3e7f2e03dd372dda448cfd2aaaad6c001379f05f3b08e083836a9246a98c7f}
   Seguranca__Clientes__1__Permissoes__0: lancamentos.escrita
   Seguranca__Clientes__1__LimitePorSegundo: 20
   # bi: um sistema de relatórios, que só lê
   Seguranca__Clientes__2__Nome: bi
-  Seguranca__Clientes__2__Chave: ${API_KEY_BI:-local-bi-key}
+  Seguranca__Clientes__2__ChaveSha256: ${API_KEY_BI_SHA256:-76bfcb761ec5bc9649a0de6451834fdf4ba35b72c829f115b389227f702b58ec}
   Seguranca__Clientes__2__Permissoes__0: lancamentos.leitura
   Seguranca__Clientes__2__Permissoes__1: consolidado.leitura
   Seguranca__Clientes__2__LimitePorSegundo: 20
 
 services:
   postgres-lancamentos:
-    image: postgres:17-alpine
+    image: postgres:17
+    # TLS ligado, com o certificado de teste que já vem na imagem, e conexão pela rede só com TLS.
+    command: *postgres-com-tls
     environment:
       POSTGRES_DB: lancamentos
       POSTGRES_USER: postgres
@@ -38,6 +55,7 @@ services:
       - "15432:5432"
     volumes:
       - lancamentos-data:/var/lib/postgresql/data
+      - ./infra/postgres/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d lancamentos"]
       interval: 5s
@@ -45,7 +63,9 @@ services:
       retries: 10
 
   postgres-consolidado:
-    image: postgres:17-alpine
+    image: postgres:17
+    # TLS ligado, com o certificado de teste que já vem na imagem, e conexão pela rede só com TLS.
+    command: *postgres-com-tls
     environment:
       POSTGRES_DB: consolidado
       POSTGRES_USER: postgres
@@ -54,6 +74,7 @@ services:
       - "15433:5432"
     volumes:
       - consolidado-data:/var/lib/postgresql/data
+      - ./infra/postgres/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d consolidado"]
       interval: 5s
@@ -81,7 +102,7 @@ services:
       context: .
       dockerfile: src/Lancamentos.Api/Dockerfile
     environment:
-      ConnectionStrings__Lancamentos: "Host=postgres-lancamentos;Database=lancamentos;Username=postgres;Password=${POSTGRES_PASSWORD:-local-dev}"
+      ConnectionStrings__Lancamentos: "Host=postgres-lancamentos;Database=lancamentos;Username=postgres;Password=${POSTGRES_PASSWORD:-local-dev};SSL Mode=Require"
       RabbitMQ__Host: rabbitmq
       RabbitMQ__User: fluxo
       RabbitMQ__Password: ${RABBITMQ_PASSWORD:-local-dev}
@@ -99,7 +120,7 @@ services:
       context: .
       dockerfile: src/Consolidado.Api/Dockerfile
     environment:
-      ConnectionStrings__Consolidado: "Host=postgres-consolidado;Database=consolidado;Username=postgres;Password=${POSTGRES_PASSWORD:-local-dev}"
+      ConnectionStrings__Consolidado: "Host=postgres-consolidado;Database=consolidado;Username=postgres;Password=${POSTGRES_PASSWORD:-local-dev};SSL Mode=Require"
       RabbitMQ__Host: rabbitmq
       RabbitMQ__User: fluxo
       RabbitMQ__Password: ${RABBITMQ_PASSWORD:-local-dev}
