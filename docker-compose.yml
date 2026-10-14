@@ -54,7 +54,7 @@ x-clientes-da-api: &clientes-da-api
 
 services:
   postgres-lancamentos:
-    image: postgres:17
+    image: postgres:18
     # TLS ligado, com o certificado de teste que já vem na imagem, e conexão pela rede só com TLS.
     command: *postgres-com-tls
     environment:
@@ -73,7 +73,7 @@ services:
       retries: 10
 
   postgres-consolidado:
-    image: postgres:17
+    image: postgres:18
     # TLS ligado, com o certificado de teste que já vem na imagem, e conexão pela rede só com TLS.
     command: *postgres-com-tls
     environment:
