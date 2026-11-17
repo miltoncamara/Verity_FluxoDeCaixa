@@ -1,5 +1,5 @@
 # Build a partir da raiz do repositório: docker build -f src/Lancamentos.Api/Dockerfile .
-FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+FROM mcr.microsoft.com/dotnet/sdk:11.0 AS build
 WORKDIR /src
 
 # Restore em camada separada para aproveitar o cache do Docker.
