@@ -12,7 +12,7 @@ COPY src/Contracts/ src/Contracts/
 COPY src/Lancamentos.Api/ src/Lancamentos.Api/
 RUN dotnet publish src/Lancamentos.Api/Lancamentos.Api.csproj -c Release -o /app --no-restore
 
-FROM mcr.microsoft.com/dotnet/aspnet:10.0
+FROM mcr.microsoft.com/dotnet/aspnet:11.0
 WORKDIR /app
 COPY --from=build /app .
 USER $APP_UID
